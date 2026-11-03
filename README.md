@@ -1,91 +1,155 @@
+<p align="center">
+  <img src="assets/obs-monitor.svg" width="72" alt="OBS Monitor 图标">
+</p>
+
 # OBS Monitor
 
-Windows 上的 OBS 录制控制台，提供电脑按钮、手机局域网遥控、实时录制大小与可关闭的声音反馈。当前版本 **2.1.1**，支持浅色与深色主题。
+在电脑或手机上控制 OBS 录制，实时查看录制时长和累计输出大小。
 
-## 下载与运行
+OBS Monitor 是一款 Windows 桌面工具。手机通过局域网网页连接，无需安装手机 App；首次配对后，可以随时关闭浏览器，下次访问自动恢复连接。
 
-从 [GitHub Releases](https://github.com/ElmaTony/obs-monitor/releases) 选择适合设备的包：
+**[下载最新版](https://github.com/ElmaTony/obs-monitor/releases/latest)** · [更新记录](CHANGELOG.md) · [反馈问题](https://github.com/ElmaTony/obs-monitor/issues)
 
-| 文件 | 用途 |
+![OBS Monitor 桌面界面](assets/desktop-light.png)
+
+*界面使用示例数据，支持浅色与深色主题。*
+
+## 主要功能
+
+| 功能 | 说明 |
 | --- | --- |
-| `obs-monitor-2.1.1-windows-x64-setup.exe` | Windows x64 安装版，带快捷方式与卸载入口 |
-| `obs-monitor-2.1.1-windows-x64-portable.zip` | x64 免安装包，解压整个目录后运行 `obs-monitor.exe` |
-| `obs-monitor-2.1.1-windows-x64.exe` | x64 单文件程序，无需 Python |
-| `obs-monitor-2.1.1-windows-arm64-*` | Windows ARM64 原生版本，对应上述三种形式 |
-| `obs-monitor-2.1.1-source.zip` | 完整源码、测试、许可证和构建脚本 |
-| `SHA256SUMS.txt` | 发布文件的 SHA-256 校验值 |
+| 录制控制 | 开始、结束、暂停、继续；电脑和手机状态同步 |
+| 实时大小 | 直接读取 OBS 累计输出字节数，录像文件属性显示 0 KB 时仍可更新 |
+| 手机遥控 | 扫码或粘贴链接配对，关闭浏览器后可重新连接 |
+| 声音反馈 | 四种操作有不同提示音，可总关闭或分别关闭 |
+| 大小提醒 | 达到设定阈值后提醒，每次录制提醒一次 |
+| 连接恢复 | 断网自动重连，回到手机页面时立即更新状态 |
+| 桌面界面 | 紧凑布局、双主题、单实例运行 |
 
-x64 面向 Windows 10 / 11，ARM64 面向 Windows 11 ARM。OBS Studio 需要另外安装，启用其内置的 **WebSocket v5** 服务。发布包不包含 OBS。
+## 下载
 
-首次使用：
+当前版本：**2.1.1**。所有程序包均包含运行环境，无需安装 Python。
 
-1. 在 OBS 的「工具 → WebSocket 服务器设置」启用服务，默认端口 `4455`。
-2. 运行 OBS Monitor。工具会读取本机 OBS 连接配置；未连接时在右上角「设置」填写相同的地址、端口和密码。
-3. 用电脑上的开始、暂停、继续、结束按钮控制录制。每种操作都有不同的电脑提示音，可总关闭或分别关闭。
-4. 手机与电脑连接同一 Wi-Fi，扫描二维码，或打开电脑中「复制链接」得到的完整地址。默认手机端口 `8765`。
+| 平台 | 安装版 | 免安装 ZIP | 单文件 EXE |
+| --- | --- | --- | --- |
+| Windows x64 | [下载](https://github.com/ElmaTony/obs-monitor/releases/download/v2.1.1/obs-monitor-2.1.1-windows-x64-setup.exe) | [下载](https://github.com/ElmaTony/obs-monitor/releases/download/v2.1.1/obs-monitor-2.1.1-windows-x64-portable.zip) | [下载](https://github.com/ElmaTony/obs-monitor/releases/download/v2.1.1/obs-monitor-2.1.1-windows-x64.exe) |
+| Windows ARM64 | [下载](https://github.com/ElmaTony/obs-monitor/releases/download/v2.1.1/obs-monitor-2.1.1-windows-arm64-setup.exe) | [下载](https://github.com/ElmaTony/obs-monitor/releases/download/v2.1.1/obs-monitor-2.1.1-windows-arm64-portable.zip) | [下载](https://github.com/ElmaTony/obs-monitor/releases/download/v2.1.1/obs-monitor-2.1.1-windows-arm64.exe) |
 
-升级到 2.1.1 后，先关闭旧版工具，运行新版，再在手机重新加载页面，确认页脚为 `v2.1.1`。首次升级可能需要使用一次新版完整链接。
+- **安装版**：带开始菜单入口和卸载功能，适合日常使用。
+- **免安装 ZIP**：完整解压后运行 `obs-monitor.exe`，保留同目录中的依赖文件。
+- **单文件 EXE**：下载后直接运行。
+- **架构选择**：Intel / AMD 电脑通常选择 x64；Windows ARM 设备选择 ARM64。不确定时查看 Windows 设置中的“系统类型”。
 
-## 手机可以随时关闭浏览器
+[完整源码](https://github.com/ElmaTony/obs-monitor/releases/download/v2.1.1/obs-monitor-2.1.1-source.zip) · [SHA-256 校验清单](https://github.com/ElmaTony/obs-monitor/releases/download/v2.1.1/SHA256SUMS.txt) · [全部发行版本](https://github.com/ElmaTony/obs-monitor/releases)
 
-首次配对成功后，可以切换其他 App、关闭标签页或重启浏览器，之后访问同一电脑地址会自动恢复。电脑工具重启后也会保留配对，录制操作不会在重连时自动重放。
+系统要求：Windows 10 / 11 x64，或 Windows 11 ARM64。需要另外安装支持 **WebSocket v5** 的 OBS Studio。
 
-- 浏览器使用长期 HttpOnly Cookie 和本地存储保存配对。保留完整链接或加入书签，也可以恢复连接。
-- 新浏览器支持粘贴完整链接配对，不必只能扫码。
-- 「忘记此设备」只清除当前浏览器配对；电脑设置中的「重置所有手机配对」会使旧链接与所有旧配对失效。
-- 无痕模式关闭、手动清除网站数据或更换浏览器后，需要使用完整链接重新配对。
-- 访问地址由主机和端口组成。电脑 IP 或端口变化后需要打开新地址；建议给电脑设置稳定的局域网地址。
-- 网页进入后台时停止轮询，恢复前台后立即重新读取状态；断网后自动重试，也可手动点「重新连接」。
+## 快速开始
 
-电脑软件需要保持运行。首次访问若被防火墙拦截，请允许 OBS Monitor 的专用网络访问。访客 Wi-Fi 的设备隔离或 VPN 可能阻止连接，无需路由器端口映射。控制链接等同于遥控权限，请只给可信设备使用。
+### 电脑端
 
-## 实时大小和录制控制
+1. 打开 OBS，在 **工具 → WebSocket 服务器设置** 中启用服务器，默认端口为 `4455`。
+2. 运行 OBS Monitor。工具会尝试读取本机 OBS 配置；未连接时，点击右上角 **设置**，填写与 OBS 一致的地址、端口和密码。
+3. 连接成功后，用四个录制按钮控制 OBS。声音开关和各操作的试听按钮位于右侧。
 
-工具直接读取 OBS `GetRecordStatus.outputBytes`，显示原始整数「字节」和便于阅读的 KB / MB / GB。即使录像文件属性仍为 **0 KB**，数据也跟随 OBS 自身累计输出量更新，不通过文件属性或码率推算。
+### 手机端
 
-该数值精确对应 OBS 的累计输出统计；最终 MKV / MP4 还包含容器封装等信息，不能把它当成最终文件长度。桌面约 0.5 秒轮询，手机前台约 0.8 秒刷新。断线或数据超过 3 秒未更新时会标记旧数据并禁用操作。
+1. 手机与电脑连接同一局域网。电脑接网线、手机连接同一路由器的 Wi-Fi 也可以。
+2. 扫描电脑工具中的二维码，或打开 **复制链接** 得到的完整地址。默认手机网页端口为 `8765`。
+3. 首次配对成功后，可以将页面加入书签。之后在同一浏览器访问同一电脑地址，会自动恢复连接。
 
-控制请求只有在实际状态稳定后才报告成功和播放提示音。暂停、继续之间会按帧率等待至少三个视频帧间隔，且不少于 0.2 秒；操作失败、超时或结果未知时不会播放成功音，也不会自动重试控制命令。
+<details>
+<summary>查看手机界面</summary>
 
-OBS 的录制编码配置必须支持暂停。「与直播相同的编码器」等配置可能不支持，工具会显示 OBS 返回的错误。结束后保留上次大小与时长；开始新录制时重置。可设置大小提醒，每次录制提醒一次，断线重连不重复提醒。
+<p><img src="assets/mobile-light.jpg" width="320" alt="手机端录制控制与配对状态，使用示例数据"></p>
 
-关闭工具只会停止连接与手机服务，不会结束 OBS 中的录制。重复启动会激活已运行的窗口，避免重复声音与端口冲突。
+</details>
 
-## 界面和设置
+## 配对与重新连接
 
-桌面默认 880×600，最小 780×540；四个录制按钮同排，高 38 像素。电脑与手机独立记忆浅色 / 深色主题。
+录制时可以切换其他 App、关闭标签页或退出浏览器，无需一直保持页面打开。电脑工具重启后也会保留配对；手机返回页面时会重新读取当前录制状态。
 
-安装版和免安装版使用同一用户配置，保存在 `%APPDATA%/OBSAudioMonitor/config.json`，沿用旧版目录以兼容现有设置。OBS 密码与手机配对凭证分开保存在 Windows 凭据管理器中，不写入源码或普通 JSON。不随发布包分发个人配置、凭证、日志和录制文件。卸载程序保留用户设置。
+- **忘记此设备**：清除当前浏览器的配对。
+- **重置所有手机配对**：在电脑设置中操作，所有旧链接和已配对浏览器都需要重新连接。
+- **需要重新配对的情况**：无痕窗口关闭、清除网站数据、更换浏览器，或电脑端重置了配对。
+- **电脑地址变化**：IP 或网页端口改变后，请使用工具显示的新链接。
 
-## 开发与验证
+手机遥控期间，电脑工具需要保持运行。控制链接包含遥控凭证，请只分享给可信设备，并在可信局域网中使用。
 
-需要 Windows、Python 3.12、Node.js 22 或更新版本：
+## 实时录制大小说明
+
+录制中的文件可能暂时显示 **0 KB**。OBS Monitor 读取的是 OBS 的 `GetRecordStatus.outputBytes`，不依赖文件属性，也不按码率估算；两端同时显示原始字节数和便于阅读的 KB / MB / GB。
+
+这个计数表示 **OBS 累计输出量**。最终 MKV / MP4 文件还包含封装信息，文件长度可能与计数不同。
+
+桌面约每 0.5 秒更新，手机前台约每 0.8 秒更新。断线或数据过期时，页面会标记上次有效数据并暂时禁用录制按钮。操作成功以 OBS 的实际状态确认为准。
+
+## 常见问题
+
+### 手机打不开页面
+
+确认电脑工具正在运行，并使用工具显示的局域网链接。`127.0.0.1` 仅供电脑本机访问。
+
+检查 Windows 防火墙是否允许 OBS Monitor 通过专用网络，手机和电脑之间是否存在 VPN、访客 Wi-Fi 或设备隔离。OBS 的连接端口默认是 `4455`，手机网页端口默认是 `8765`。
+
+### 为什么部分按钮是灰色的？
+
+按钮随录制状态变化：准备就绪时可开始；录制中可暂停或结束；暂停后可继续或结束。正在处理操作、连接中断或数据过期时，需要等待最新状态。
+
+### OBS 提示无法暂停
+
+检查 OBS 的录制编码设置是否支持暂停。“与直播相同的编码器”等配置可能不支持，请使用支持暂停的独立录制编码器。
+
+### 关闭工具会停止录制吗？
+
+正在进行的录制会继续。关闭 OBS Monitor 会关闭它的连接和手机网页服务，之后仍可在 OBS 中操作录制。
+
+### 设置和密码保存在哪里？
+
+设置保存在 `%APPDATA%/OBSAudioMonitor/config.json`，沿用旧版目录以兼容已有配置。OBS 密码和手机配对凭证分别保存在 Windows 凭据管理器中。安装版与免安装版共享当前用户的设置，卸载程序保留用户配置。
+
+## 开发
+
+<details>
+<summary>源码运行、测试与打包</summary>
+
+源码运行使用 Windows 和 Python 3.12；手机脚本测试需要 Node.js 22 或更新版本，生成安装包还需要 [Inno Setup](https://jrsoftware.org/isinfo.php)。
 
 ```powershell
-python -m pip install -r requirements-build.txt
-python -B -m unittest discover -v
+git clone https://github.com/ElmaTony/obs-monitor.git
+cd obs-monitor
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements-build.txt
+.\.venv\Scripts\python.exe main.py
+```
+
+运行测试：
+
+```powershell
+.\.venv\Scripts\python.exe -B -m unittest discover -v
 node test_mobile.cjs
 node test_mobile_races.cjs
 node test_mobile_pairing.cjs
-python main.py
 ```
 
-测试覆盖 OBS v5 协议、开始 / 暂停 / 继续 / 结束、状态确认、精确字节、声音、设置回滚、过期数据、HTTP 权限、浏览器持久配对、桌面重启、配对撤销、后台恢复和乱序响应。Qt 自动测试可设置 `QT_QPA_PLATFORM=offscreen`。
-
-以前的真实 OBS 联调已验证文件属性 0 KB 时输出字节数仍增长。模拟测试与真实设备验收各有用途；实际手机 Wi-Fi、防火墙、扬声器音量仍需在使用环境确认。
-
-## 本机打包
-
-安装 [Inno Setup](https://jrsoftware.org/isinfo.php)，然后执行：
+生成 x64 发布包：
 
 ```powershell
-python scripts/build_release.py --arch x64 --iscc "C:/Program Files/Inno Setup 7/ISCC.exe"
+.\.venv\Scripts\python.exe scripts/build_release.py --arch x64 --iscc "C:/Program Files/Inno Setup 7/ISCC.exe"
 ```
 
-ARM64 必须在原生 Windows ARM64 Python 中执行同一脚本，参数改成 `--arch arm64`。脚本检查程序和所有 DLL / PYD 的 PE 架构，阻止把 x64 程序误标成 ARM64。完整流程包含测试、两种 PyInstaller 打包、安装包、源码与校验文件。输出默认放在忽略的 `release/`，临时文件在 `build/`，可用 `--output` / `--work` 指定其他目录。
+ARM64 使用原生 Windows ARM64 Python，将参数改为 `--arch arm64`。默认产物位于 `release/`，临时文件位于 `build/`；可用 `--output` 和 `--work` 指定其他目录。
 
-仓库内 `.github/workflows/release.yml` 在 x64 与 `windows-11-arm` runner 分别原生构建。手动运行可下载构建产物；推送与 `version.py` 一致的 `v2.1.1` 标签会生成包含两种架构的 **草稿 Release**，检查后再发布。
+推送与 `version.py` 一致的版本标签后，GitHub Actions 分别在 x64 和 ARM64 环境中构建与验收；两种架构均通过后，自动发布正式 Release。手动运行构建工作流只生成可下载的构建产物。
 
-依赖许可随包提供于 `licenses/`。主项目以 [GPL-3.0-only](LICENSE) 发布；第三方组件采用各自许可证，见 [NOTICE.txt](NOTICE.txt)。项目与 OBS Studio 无隶属关系。
+测试覆盖录制控制、原始字节、声音、设置、持久配对、连接恢复、乱序响应和发布归档。成品验收使用隔离的模拟 OBS 服务；实际手机网络、防火墙与扬声器仍需在使用环境确认。
 
-协议参考：[OBS WebSocket 官方文档](https://github.com/obsproject/obs-websocket/blob/master/docs/generated/protocol.md)。
+贡献约定见 [CONTRIBUTING.md](CONTRIBUTING.md)，安全说明见 [SECURITY.md](SECURITY.md)。
+
+</details>
+
+## 许可证
+
+本项目以 [GPL-3.0-only](LICENSE) 发布，第三方组件遵循各自许可证，详见 [NOTICE.txt](NOTICE.txt) 与 [licenses/](licenses/)。
+
+OBS Studio 需要单独安装。OBS Monitor 是独立项目，与 OBS Studio 无隶属关系。

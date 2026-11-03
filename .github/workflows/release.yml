@@ -59,7 +59,7 @@ jobs:
           path: release/*
           if-no-files-found: error
           retention-days: 14
-  draft:
+  publish:
     if: startsWith(github.ref, 'refs/tags/')
     needs: build
     runs-on: ubuntu-latest
@@ -75,8 +75,13 @@ jobs:
       - name: Combine checksums
         working-directory: release
         run: sha256sum obs-monitor-*.exe obs-monitor-*.zip > SHA256SUMS.txt
-      - name: Create reviewable draft release
+      - name: Upload complete release assets
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: gh release create "$RELEASE_TAG" release/* --draft --title "OBS Monitor $RELEASE_TAG" --notes-file CHANGELOG.md
+      - name: Publish verified release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: gh release edit "$RELEASE_TAG" --draft=false --latest
