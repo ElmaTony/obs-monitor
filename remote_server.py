@@ -12,6 +12,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from pairing import PairingIdentity
+from version import VERSION
 
 PAIRING_COOKIE = "obs_monitor_pairing"
 PAIRING_MAX_AGE = 365 * 24 * 60 * 60
@@ -58,7 +59,7 @@ class RemoteServer:
         if self.server:
             return
         owner = self
-        page = (Path(__file__).parent / "mobile.html").read_bytes()
+        page = (Path(__file__).parent / "mobile.html").read_bytes().replace(b"__APP_VERSION__", VERSION.encode("ascii"))
 
         class Handler(BaseHTTPRequestHandler):
             protocol_version = "HTTP/1.1"

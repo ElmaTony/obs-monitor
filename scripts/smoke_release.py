@@ -20,7 +20,7 @@ sys.path.insert(0, str(ROOT))
 from pairing import PairingIdentity
 from platform_support import WindowsCredentialStore
 from version import VERSION
-from build_release import pe_arch
+from scripts.build_release import pe_arch
 from websockets.sync.server import serve
 from websockets.exceptions import ConnectionClosed
 
@@ -76,6 +76,16 @@ def stop_owned_process(process):
         subprocess.run(['taskkill','/PID',str(process.pid),'/T','/F'],
                        stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,check=False)
         process.wait(timeout=15)
+
+
+def wait_for_uninstall(directory, timeout=30):
+    # Inno's bootstrap process can exit before its self-delete helper. ARM64
+    # emulation makes that gap visible: the app is gone but unins000.exe is locked.
+    deadline = time.monotonic()+timeout
+    while any((directory/name).exists() for name in ('obs-monitor.exe','unins000.exe')):
+        if time.monotonic() >= deadline:
+            raise TimeoutError('Uninstaller did not finish releasing its own files')
+        time.sleep(0.1)
 
 
 def verify_program(executable, root):
@@ -202,9 +212,7 @@ def main():
                 uninstaller = installed/'unins000.exe'
                 if uninstaller.exists():
                     subprocess.run([str(uninstaller),'/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART'],check=True,timeout=60)
-                    deadline = time.monotonic()+15
-                    while (installed/'obs-monitor.exe').exists() and time.monotonic()<deadline:
-                        time.sleep(0.1)
+                    wait_for_uninstall(installed)
                 assert not (installed/'obs-monitor.exe').exists(), 'Uninstall did not remove its application'
             report['checks']['uninstall'] = True
     (directory / f'smoke-windows-{args.arch}.json').write_text(json.dumps(report,indent=2),encoding='utf-8')

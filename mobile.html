@@ -70,7 +70,7 @@
   </div>
   <div class="sound"><div><b>电脑操作提示音</b><p>开始 / 结束 / 暂停 / 继续时播放</p></div><label class="switch"><input id="sound" type="checkbox" aria-label="电脑操作提示音" disabled><span></span></label></div>
   <div class="pairing-footer"><span id="pairingStatus">连接后自动记住此浏览器</span><button id="forget" class="theme-button" disabled>忘记此设备</button></div>
-  <p class="foot">手机与电脑保持同一 Wi-Fi，电脑软件保持运行。<br>可关闭浏览器，下次访问自动恢复 · v2.1.0</p>
+  <p class="foot">手机与电脑保持同一 Wi-Fi，电脑软件保持运行。<br>可关闭浏览器，下次访问自动恢复 · v__APP_VERSION__</p>
 </main>
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 <script>
@@ -177,7 +177,7 @@
     enableButtons();
   }
   function render(state) {
-    if (!state || !state.allowed || !Number.isSafeInteger(state.revision) || typeof state.instance_id !== 'string' || !state.instance_id) throw new Error('电脑返回的状态无效，请确认电脑和手机均已更新至 v2.1.0');
+    if (!state || !state.allowed || !Number.isSafeInteger(state.revision) || typeof state.instance_id !== 'string' || !state.instance_id) throw new Error('电脑返回的状态无效，请确认电脑工具和手机页面都已更新');
     if (state.instance_id !== acceptedInstance) {
       if (retiredInstances.has(state.instance_id)) return false;
       if (acceptedInstance) retiredInstances.add(acceptedInstance);

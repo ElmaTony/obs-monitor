@@ -1,6 +1,6 @@
 # OBS Monitor
 
-Windows 上的 OBS 录制控制台，提供电脑按钮、手机局域网遥控、实时录制大小与可关闭的声音反馈。当前版本 **2.1.0**，支持浅色与深色主题。
+Windows 上的 OBS 录制控制台，提供电脑按钮、手机局域网遥控、实时录制大小与可关闭的声音反馈。当前版本 **2.1.1**，支持浅色与深色主题。
 
 ## 下载与运行
 
@@ -8,11 +8,11 @@ Windows 上的 OBS 录制控制台，提供电脑按钮、手机局域网遥控�
 
 | 文件 | 用途 |
 | --- | --- |
-| `obs-monitor-2.1.0-windows-x64-setup.exe` | Windows x64 安装版，带快捷方式与卸载入口 |
-| `obs-monitor-2.1.0-windows-x64-portable.zip` | x64 免安装包，解压整个目录后运行 `obs-monitor.exe` |
-| `obs-monitor-2.1.0-windows-x64.exe` | x64 单文件程序，无需 Python |
-| `obs-monitor-2.1.0-windows-arm64-*` | Windows ARM64 原生版本，对应上述三种形式 |
-| `obs-monitor-2.1.0-source.zip` | 完整源码、测试、许可证和构建脚本 |
+| `obs-monitor-2.1.1-windows-x64-setup.exe` | Windows x64 安装版，带快捷方式与卸载入口 |
+| `obs-monitor-2.1.1-windows-x64-portable.zip` | x64 免安装包，解压整个目录后运行 `obs-monitor.exe` |
+| `obs-monitor-2.1.1-windows-x64.exe` | x64 单文件程序，无需 Python |
+| `obs-monitor-2.1.1-windows-arm64-*` | Windows ARM64 原生版本，对应上述三种形式 |
+| `obs-monitor-2.1.1-source.zip` | 完整源码、测试、许可证和构建脚本 |
 | `SHA256SUMS.txt` | 发布文件的 SHA-256 校验值 |
 
 x64 面向 Windows 10 / 11，ARM64 面向 Windows 11 ARM。OBS Studio 需要另外安装，启用其内置的 **WebSocket v5** 服务。发布包不包含 OBS。
@@ -24,7 +24,7 @@ x64 面向 Windows 10 / 11，ARM64 面向 Windows 11 ARM。OBS Studio 需要另�
 3. 用电脑上的开始、暂停、继续、结束按钮控制录制。每种操作都有不同的电脑提示音，可总关闭或分别关闭。
 4. 手机与电脑连接同一 Wi-Fi，扫描二维码，或打开电脑中「复制链接」得到的完整地址。默认手机端口 `8765`。
 
-升级到 2.1.0 后，先关闭旧版工具，运行新版，再在手机重新加载页面，确认页脚为 `v2.1.0`。首次升级可能需要使用一次新版完整链接。
+升级到 2.1.1 后，先关闭旧版工具，运行新版，再在手机重新加载页面，确认页脚为 `v2.1.1`。首次升级可能需要使用一次新版完整链接。
 
 ## 手机可以随时关闭浏览器
 
@@ -84,7 +84,7 @@ python scripts/build_release.py --arch x64 --iscc "C:/Program Files/Inno Setup 7
 
 ARM64 必须在原生 Windows ARM64 Python 中执行同一脚本，参数改成 `--arch arm64`。脚本检查程序和所有 DLL / PYD 的 PE 架构，阻止把 x64 程序误标成 ARM64。完整流程包含测试、两种 PyInstaller 打包、安装包、源码与校验文件。输出默认放在忽略的 `release/`，临时文件在 `build/`，可用 `--output` / `--work` 指定其他目录。
 
-仓库内 `.github/workflows/release.yml` 在 x64 与 `windows-11-arm` runner 分别原生构建。手动运行可下载构建产物；推送与 `version.py` 一致的 `v2.1.0` 标签会生成包含两种架构的 **草稿 Release**，检查后再发布。
+仓库内 `.github/workflows/release.yml` 在 x64 与 `windows-11-arm` runner 分别原生构建。手动运行可下载构建产物；推送与 `version.py` 一致的 `v2.1.1` 标签会生成包含两种架构的 **草稿 Release**，检查后再发布。
 
 依赖许可随包提供于 `licenses/`。主项目以 [GPL-3.0-only](LICENSE) 发布；第三方组件采用各自许可证，见 [NOTICE.txt](NOTICE.txt)。项目与 OBS Studio 无隶属关系。
 
