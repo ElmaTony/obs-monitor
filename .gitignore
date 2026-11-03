@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+.venv/
+build/
+dist/
+.pytest_cache/
+release/
+work/
+node_modules/
+*.log
+*.tmp
+*.exe
+*.zip
+.migration/
+validation/
+config.json
+pairing.key

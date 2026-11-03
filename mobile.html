@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#0c1018">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>OBS Monitor · 手机遥控</title>
+  <style>
+
+    :root{color-scheme:light;--bg:#f4f6fa;--panel:#fff;--line:#e4e9f2;--muted:#7d8a9f;--text:#17233b;--red:#d7475e;--green:#14866a;--accent:#4263eb;--subtle:#f6f8fc;--warning:#a66e17;--notice-bg:#fff0f2}
+    :root[data-theme="dark"]{color-scheme:dark;--bg:#10151f;--panel:#192130;--line:#2d384c;--muted:#98a7bf;--text:#edf2fb;--red:#ff8797;--green:#65d8b0;--accent:#8ca5ff;--subtle:#202a3b;--warning:#edc17a;--notice-bg:#422b39}
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,"Microsoft YaHei",sans-serif;-webkit-tap-highlight-color:transparent}
+    button,input{font:inherit}button{touch-action:manipulation;cursor:pointer}button:disabled{cursor:default}
+    button:focus-visible,a:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+    main{max-width:500px;margin:auto;padding:28px 22px calc(28px + env(safe-area-inset-bottom))}
+    .top{display:flex;align-items:center;justify-content:space-between;margin-bottom:28px}.brand{display:flex;align-items:center;gap:11px}
+    .logo{width:36px;height:36px;border-radius:12px;background:#4263eb;display:grid;place-items:center}.logo:before{content:"";height:11px;width:11px;border-radius:50%;background:#fff}
+    .brand b{display:block;font-size:17px;letter-spacing:-.4px}.brand small{font-size:9px;letter-spacing:1px;color:var(--muted)}
+    .theme-button{border:1px solid var(--line);color:var(--muted);background:var(--panel);border-radius:10px;padding:8px 10px;font-size:11px;line-height:1.5;min-height:34px}
+    .badge{font-size:11px;display:flex;align-items:center;gap:6px;color:var(--muted)}.dot{height:6px;width:6px;border-radius:50%;background:currentColor}.badge.online{color:var(--green)}
+    h1{font-size:25px;letter-spacing:-.5px;margin:0}.hero{background:var(--panel);border:1px solid var(--line);border-radius:22px;padding:24px;margin-bottom:23px}
+    .hero-top{display:flex;align-items:center;justify-content:space-between}.state{font-size:13px;font-weight:650;display:flex;align-items:center;gap:7px}.live .state{color:var(--red)}.paused .state{color:var(--warning)}
+    .caps{font-size:10px;letter-spacing:1.8px;color:var(--muted)}.clock{font-variant-numeric:tabular-nums;font-family:ui-monospace,Consolas,monospace;font-size:clamp(38px,12vw,53px);letter-spacing:-2.5px;line-height:1.2;margin:25px 0 7px}
+    .clock-label{font-size:12px;color:var(--muted);margin-bottom:22px}.divider{height:1px;background:var(--line);margin-bottom:22px}.size-row{display:flex;align-items:end;justify-content:space-between}
+    .label{font-size:12px;color:var(--muted)}.size{font-size:27px;letter-spacing:-1px;font-variant-numeric:tabular-nums;margin-top:5px;font-weight:650}.limit{font-size:12px;color:var(--muted);padding-bottom:5px}
+    .track{height:4px;overflow:hidden;background:var(--subtle);border-radius:4px;margin:15px 0 10px}.fill{height:100%;width:0;background:var(--accent);border-radius:4px;transition:width .5s}.hint{font-size:11px;line-height:1.7;color:var(--muted)}
+    .section-head{display:flex;justify-content:space-between;align-items:center;margin:0 2px 13px}.section-head b{font-size:14px}.section-head span{font-size:10px;color:var(--muted)}
+    .actions{display:grid;grid-template-columns:1fr 1fr;gap:11px}.action{appearance:none;-webkit-appearance:none;border:1px solid var(--line);border-radius:16px;background:var(--panel);color:var(--text);padding:18px;text-align:left;min-height:100px;transition:transform .15s}
+    .action:active:enabled{transform:scale(.97)}.action .icon{display:block;margin-bottom:12px;height:18px;line-height:18px;font-size:18px}.action b{font-size:15px;font-weight:650}
+    .action.primary{background:#4263eb;border-color:#4263eb;color:#fff}.action:disabled{opacity:1;background:var(--subtle);border-color:var(--line);color:var(--muted)}
+    .action.pause[data-available="true"]{background:#fff4d9;border-color:#e7c882;color:#7d540f}.action.resume[data-available="true"]{background:#e6f7f0;border-color:#9bdbc3;color:#14654e}.action.stop[data-available="true"]{background:#fff0f2;border-color:#edb7c0;color:#ae3047}
+    :root[data-theme="dark"] .action.pause[data-available="true"]{background:#403425;border-color:#796239;color:#f4d194}:root[data-theme="dark"] .action.resume[data-available="true"]{background:#193d35;border-color:#366c5c;color:#82e2bf}:root[data-theme="dark"] .action.stop[data-available="true"]{background:#422937;border-color:#774452;color:#ff9bad}
+    .sound{display:flex;align-items:center;justify-content:space-between;gap:20px;background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:17px 18px;margin-top:22px}.sound b{font-size:13px}.sound p{font-size:11px;color:var(--muted);margin:5px 0 0}
+    .switch{position:relative;display:block;flex-shrink:0;width:43px;height:25px}.switch input{opacity:0;width:100%;height:100%;margin:0;position:absolute;z-index:2;cursor:pointer}.switch span{position:absolute;inset:0;background:var(--muted);border-radius:25px}
+    .switch span:after{content:"";position:absolute;width:19px;height:19px;left:3px;top:3px;border-radius:50%;background:#fff;transition:transform .2s}.switch input:checked+span{background:var(--accent)}.switch input:checked+span:after{transform:translateX(18px)}.switch input:focus-visible+span{outline:2px solid var(--accent);outline-offset:3px}
+    .notice{display:none;background:var(--notice-bg);color:var(--red);padding:13px 16px;font-size:12px;line-height:1.7;border-radius:13px;margin-bottom:18px;overflow-wrap:anywhere}.notice.show{display:block}
+    .pairing{border:1px solid var(--line);border-radius:16px;background:var(--panel);padding:18px;margin-bottom:18px;font-size:13px}.pairing p{font-size:12px;color:var(--muted);line-height:1.8}.pairing input{width:100%;min-height:42px;border:1px solid var(--line);border-radius:9px;padding:9px;background:var(--subtle);color:var(--text);font-size:16px;margin-bottom:10px}
+    .pairing .theme-button{color:#fff;background:#4263eb;border-color:#4263eb;min-height:40px}.reconnect{margin-bottom:18px;color:var(--accent)}.pairing-footer{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:18px;font-size:10px;color:var(--muted)}.pairing-footer button{flex-shrink:0}
+    .pairing[hidden],.reconnect[hidden]{display:none}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+    .foot{font-size:11px;text-align:center;line-height:1.9;color:var(--muted);margin-top:22px}.toast{position:fixed;bottom:30px;left:50%;transform:translate(-50%,12px);max-width:90vw;background:var(--text);color:var(--panel);box-shadow:0 8px 28px #17233b20;border-radius:14px;padding:13px 19px;font-size:13px;opacity:0;transition:.2s;pointer-events:none;z-index:10}.toast.show{opacity:1;transform:translate(-50%,0)}
+    @media(min-width:700px){main{padding-top:42px}.hero{padding:28px}.actions{gap:14px}}
+  </style>
+</head>
+<body>
+<main>
+  <header class="top"><div class="brand"><div class="logo"></div><div><b>OBS Monitor</b><small>手机遥控</small></div></div><button id="theme" class="theme-button" aria-label="切换浅色深色主题">☾ 深色</button></header>
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px"><h1 style="margin:0">录制工作台</h1><div id="connection" class="badge"><i class="dot"></i><span>正在连接</span></div></div>
+  <div id="notice" class="notice" role="alert"></div>
+  <section id="pairing" class="pairing" hidden aria-label="连接电脑">
+    <b>连接你的电脑</b><p>粘贴电脑工具中的完整控制链接，或扫描二维码。配对后可关闭浏览器，下次自动恢复。</p>
+    <label class="sr-only" for="pairLink">电脑控制链接</label><input id="pairLink" type="url" placeholder="http://电脑地址:8765/#token=…" autocomplete="off" autocapitalize="off" spellcheck="false">
+    <button id="pairConnect" class="theme-button">连接电脑</button>
+  </section>
+  <button id="retry" class="theme-button reconnect" hidden>重新连接</button>
+  <section class="hero" id="hero" aria-label="录制状态">
+    <div class="hero-top"><div class="state"><i class="dot"></i><span id="state">等待连接</span></div><span class="caps">OBS STUDIO</span></div>
+    <div id="clock" class="clock">00:00:00</div><div class="clock-label">录制时长</div><div class="divider"></div>
+    <div class="size-row"><div><div class="label">实时录制大小</div><div id="size" class="size">—</div></div><div id="limit" class="limit"></div></div>
+    <div id="exactSize" class="hint" style="margin-top:6px;font-variant-numeric:tabular-nums">尚未收到 OBS 数据</div>
+    <div class="track"><div id="fill" class="fill"></div></div><div id="sizeHint" class="hint">从 OBS 直接读取，每 0.8 秒刷新</div>
+  </section>
+  <div class="section-head"><b>录制控制</b><span id="commandState">与电脑状态同步</span></div>
+  <div class="actions">
+    <button class="action primary" data-action="start" disabled><span class="icon">●</span><b>开始录制</b></button>
+    <button class="action pause" data-action="pause" disabled><span class="icon">Ⅱ</span><b>暂停录制</b></button>
+    <button class="action resume" data-action="resume" disabled><span class="icon">▶</span><b>继续录制</b></button>
+    <button class="action stop" data-action="stop" disabled><span class="icon">■</span><b>结束录制</b></button>
+  </div>
+  <div class="sound"><div><b>电脑操作提示音</b><p>开始 / 结束 / 暂停 / 继续时播放</p></div><label class="switch"><input id="sound" type="checkbox" aria-label="电脑操作提示音" disabled><span></span></label></div>
+  <div class="pairing-footer"><span id="pairingStatus">连接后自动记住此浏览器</span><button id="forget" class="theme-button" disabled>忘记此设备</button></div>
+  <p class="foot">手机与电脑保持同一 Wi-Fi，电脑软件保持运行。<br>可关闭浏览器，下次访问自动恢复 · v2.1.0</p>
+</main>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+<script>
+  const $ = id => document.getElementById(id);
+  const readStorage = (name, key) => {try {return globalThis[name].getItem(key);} catch {return null;}};
+  const writeStorage = (name, key, value) => {try {if (value === null) globalThis[name].removeItem(key); else globalThis[name].setItem(key, value);} catch {}};
+  const now = () => performance.now();
+  let theme = readStorage('localStorage', 'obs-theme') === 'dark' ? 'dark' : 'light';
+  function applyTheme() {
+    document.documentElement.dataset.theme = theme;
+    $('theme').textContent = theme === 'dark' ? '☀ 浅色' : '☾ 深色';
+    document.querySelector('meta[name="theme-color"]').content = theme === 'dark' ? '#10151f' : '#f4f6fa';
+  }
+  applyTheme();
+  $('theme').addEventListener('click', () => {
+    theme = theme === 'dark' ? 'light' : 'dark';
+    writeStorage('localStorage', 'obs-theme', theme);
+    applyTheme();
+  });
+
+  const parameters = new URLSearchParams(location.hash.slice(1));
+  let token = parameters.get('token') || readStorage('localStorage', 'obs-token') || readStorage('sessionStorage', 'obs-token') || '';
+  function rememberToken(value) {
+    writeStorage('localStorage', 'obs-token', value || null);
+    writeStorage('sessionStorage', 'obs-token', value || null);
+  }
+  if (token) {
+    rememberToken(token);
+  }
+  // Keep a supplied fragment in browser history/bookmarks, including when storage
+  // is blocked. It is never transmitted as part of the HTTP URL.
+  let current = null, acceptedRevision = -1, acceptedInstance = '', receivedAt = 0, receivedWallAt = 0;
+  const retiredInstances = new Set();
+  let pendingControl = false, soundBusy = false, pairingBusy = false, stopped = false, toastTimer;
+  let pollTimer, statusFlight = null, statusGeneration = 0, pollFailures = 0;
+
+  async function api(path, body, suppliedController) {
+    const controller = suppliedController || new AbortController();
+    const timeout = setTimeout(() => controller.abort(), body === undefined ? 4000 : 10000);
+    try {
+      const response = await fetch(path, {
+        method: body === undefined ? 'GET' : 'POST',
+        headers: {...(token ? {'X-OBS-Token': token} : {}), 'Content-Type': 'application/json'},
+        body: body === undefined ? undefined : JSON.stringify(body), signal: controller.signal, cache: 'no-store', credentials: 'same-origin'
+      });
+      const value = await response.json();
+      if (!response.ok) {
+        const error = new Error(value.message || '操作失败');
+        error.status = response.status;
+        throw error;
+      }
+      return value;
+    } finally {clearTimeout(timeout);}
+  }
+  function toast(message) {
+    $('toast').textContent = message;
+    $('toast').classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => $('toast').classList.remove('show'), 3500);
+  }
+  function notice(message = '') {
+    $('notice').textContent = message;
+    $('notice').classList.toggle('show', Boolean(message));
+  }
+  function expired() {
+    return !current || !current.connected || current.stale ||
+      !Number.isFinite(current.data_age_ms) || current.data_age_ms + Math.max(0, now() - receivedAt, Date.now() - receivedWallAt) > 3000;
+  }
+  function enableButtons() {
+    document.querySelectorAll('[data-action]').forEach(button => {
+      const available = Boolean(current && !expired() && !pendingControl && !pairingBusy && !current.busy && current.allowed[button.dataset.action]);
+      button.disabled = !available;
+      button.dataset.available = String(available);
+      button.setAttribute('aria-disabled', String(!available));
+    });
+    $('commandState').textContent = pairingBusy ? '正在更新设备配对…' : pendingControl ? '正在等待 OBS 确认…' :
+      current?.busy ? '电脑正在处理操作…' : expired() ? '等待最新状态' : '与电脑状态同步';
+    $('forget').disabled = !current || pendingControl || soundBusy || pairingBusy;
+  }
+  function updateView() {
+    if (!current) {enableButtons(); return;}
+    $('pairing').hidden = true;
+    $('retry').hidden = true;
+    $('pairingStatus').textContent = '已配对 · 关闭浏览器后可自动恢复';
+    const live = !expired();
+    $('connection').classList.toggle('online', live);
+    $('connection').lastElementChild.textContent = live ? 'OBS 已连接' : current.connected ? '数据已过期' : 'OBS 未连接';
+    $('state').textContent = live ? current.state_text : current.connected ? '数据已过期' : '未连接';
+    $('clock').textContent = current.duration_text;
+    $('size').textContent = current.size_text;
+    $('exactSize').textContent = current.size_exact_text + (live ? '' : ' · 上次有效数据');
+    $('hero').classList.toggle('live', live && current.active && !current.paused);
+    $('hero').classList.toggle('paused', live && current.paused);
+    const gb = current.threshold_bytes / 1073741824;
+    $('limit').textContent = current.alert_enabled ? `提醒于 ${gb.toLocaleString()} GB` : '大小提醒已关闭';
+    const percent = Math.min(100, current.bytes / Math.max(1, current.threshold_bytes) * 100);
+    $('fill').style.width = percent + '%';
+    $('fill').style.background = percent >= 100 ? 'var(--red)' : 'var(--accent)';
+    $('sizeHint').textContent = !live ? '数据已过期，等待重新连接 OBS' : current.alerted ? '本次录制已触发大小提醒' :
+      !current.active && current.bytes > 0 ? '上次录制数据 · 开始新录制后重置' : 'OBS 累计输出量，每 0.8 秒刷新';
+    if (!soundBusy) $('sound').checked = current.sound_enabled;
+    $('sound').disabled = soundBusy || pairingBusy;
+    notice(current.message || (!live && current.connected ? '正在重新确认电脑状态…' : ''));
+    enableButtons();
+  }
+  function render(state) {
+    if (!state || !state.allowed || !Number.isSafeInteger(state.revision) || typeof state.instance_id !== 'string' || !state.instance_id) throw new Error('电脑返回的状态无效，请确认电脑和手机均已更新至 v2.1.0');
+    if (state.instance_id !== acceptedInstance) {
+      if (retiredInstances.has(state.instance_id)) return false;
+      if (acceptedInstance) retiredInstances.add(acceptedInstance);
+      acceptedInstance = state.instance_id;
+      acceptedRevision = -1;
+    }
+    if (state.revision < acceptedRevision) return false;
+    acceptedRevision = state.revision;
+    current = state;
+    receivedAt = now();
+    receivedWallAt = Date.now();
+    updateView();
+    return true;
+  }
+  function offline(message) {
+    current = null;
+    $('connection').classList.remove('online');
+    $('connection').lastElementChild.textContent = '电脑连接已断开';
+    $('state').textContent = '状态已过期';
+    $('hero').classList.remove('live', 'paused');
+    $('sound').disabled = true;
+    if ($('size').textContent !== '—' && !$('exactSize').textContent.endsWith(' · 上次有效数据')) $('exactSize').textContent += ' · 上次有效数据';
+    $('sizeHint').textContent = '等待重新连接，当前显示上次有效数据';
+    $('retry').hidden = false;
+    enableButtons();
+    notice(message || '无法连接电脑，请检查 Wi-Fi 和电脑软件是否开启。');
+  }
+  function requirePairing(message) {
+    stopped = true;
+    token = '';
+    rememberToken('');
+    history.replaceState(null, '', location.pathname);
+    offline(message);
+    $('pairing').hidden = false;
+    $('retry').hidden = true;
+    $('pairingStatus').textContent = '尚未配对';
+    $('connection').lastElementChild.textContent = '尚未配对';
+    $('state').textContent = '等待配对';
+  }
+  function cancelStatus() {
+    clearTimeout(pollTimer);
+    statusGeneration++;
+    if (statusFlight) statusFlight.controller.abort();
+    statusFlight = null;
+  }
+  async function poll(replace = false) {
+    if (stopped || document.hidden) return;
+    if (replace) cancelStatus();
+    if (statusFlight) return statusFlight.promise;
+    clearTimeout(pollTimer);
+    const generation = ++statusGeneration, controller = new AbortController();
+    const flight = {generation, controller};
+    statusFlight = flight;
+    flight.promise = (async () => {
+      try {
+        const state = await api('/api/status', undefined, controller);
+        if (generation === statusGeneration) {render(state); pollFailures = 0;}
+      } catch (error) {
+        // Superseded responses and errors must never overwrite a later control result.
+        if (generation !== statusGeneration) return;
+        pollFailures++;
+        if (error.status === 401) requirePairing(error.message);
+        else offline(error.name === 'AbortError' ? '连接超时，正在重试…' : error.status ? error.message : '暂时无法连接电脑，恢复网络后会自动重连。');
+      } finally {
+        if (generation === statusGeneration) {
+          statusFlight = null;
+          if (!stopped && !document.hidden) pollTimer = setTimeout(poll, Math.min(8000, 800 * 2 ** Math.max(0, pollFailures - 1)));
+        }
+      }
+    })();
+    return flight.promise;
+  }
+
+  document.querySelectorAll('[data-action]').forEach(button => button.addEventListener('click', async () => {
+    const action = button.dataset.action;
+    if (button.disabled || pendingControl || pairingBusy || !current || expired() || current.busy || !current.allowed[action]) return;
+    pendingControl = true;
+    cancelStatus();
+    enableButtons();
+    try {
+      const result = await api('/api/control', {action});
+      render(result.state);
+      toast(result.message);
+    } catch (error) {
+      if (error.status === 401) requirePairing(error.message);
+      toast(error.name === 'AbortError' ? '操作结果尚未确认，正在更新当前状态。' : error.message);
+    } finally {
+      pendingControl = false;
+      updateView();
+      // Reconcile after every success, timeout and rejection; never retry a control request.
+      if (!stopped) void poll(true);
+    }
+  }));
+  $('sound').addEventListener('change', async () => {
+    if (soundBusy || pairingBusy || !current) return;
+    const enabled = $('sound').checked;
+    soundBusy = true;
+    $('sound').disabled = true;
+    try {
+      const result = await api('/api/sound', {enabled});
+      render(result.state);
+      toast(enabled ? '电脑提示音已开启' : '电脑提示音已关闭');
+    } catch (error) {
+      if (error.status === 401) requirePairing(error.message);
+      toast(error.message);
+    } finally {
+      soundBusy = false;
+      if (current) updateView(); else $('sound').disabled = true;
+      if (!stopped) void poll(true);
+    }
+  });
+  function resumePage() {
+    updateView();
+    if (document.hidden) cancelStatus();
+    else if (!stopped) {pollFailures = 0; void poll(true);}
+  }
+  window.addEventListener('pageshow', resumePage);
+  window.addEventListener('online', resumePage);
+  window.addEventListener('pagehide', cancelStatus);
+  document.addEventListener('visibilitychange', resumePage);
+  $('retry').addEventListener('click', () => {stopped = false; pollFailures = 0; void poll(true);});
+  $('pairConnect').addEventListener('click', () => {
+    try {
+      const link = new URL($('pairLink').value.trim(), location.href);
+      const nextToken = new URLSearchParams(link.hash.slice(1)).get('token');
+      if (link.origin !== location.origin) throw new Error('链接地址与当前电脑不同，请直接打开粘贴的完整链接。');
+      if (!nextToken || !/^[A-Za-z0-9_-]{32,128}$/.test(nextToken)) throw new Error('请输入电脑工具“复制链接”得到的完整地址。');
+      token = nextToken;
+      rememberToken(token);
+      history.replaceState(null, '', location.pathname + '#token=' + encodeURIComponent(token));
+      $('pairLink').value = '';
+      stopped = false; pollFailures = 0; void poll(true);
+    } catch (error) {notice(error.message);}
+  });
+  $('forget').addEventListener('click', async () => {
+    if (pendingControl || soundBusy || pairingBusy || !current) return;
+    pairingBusy = true;
+    cancelStatus();
+    updateView();
+    try {
+      await api('/api/unpair', {});
+      cancelStatus();
+      requirePairing('已忘记此设备。需要时可以使用电脑中的完整链接或扫码重新连接。');
+    } catch (error) {toast('未能解除配对，请恢复连接后重试。');}
+    finally {
+      pairingBusy = false;
+      updateView();
+      if (!stopped) void poll(true);
+    }
+  });
+  setInterval(() => {if (current && !document.hidden) updateView();}, 500);
+  // A persistent HttpOnly cookie can restore pairing even with no URL fragment
+  // or readable browser storage. Only the server decides whether to ask to pair.
+  void poll();
+</script>
+</body>
+</html>

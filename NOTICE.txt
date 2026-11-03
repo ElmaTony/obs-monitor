@@ -1,0 +1,31 @@
+OBS Monitor / obs-monitor
+https://github.com/ElmaTony/obs-monitor
+
+The application source is licensed under GPL-3.0-only. See LICENSE.
+Complete corresponding source and build instructions are provided in the source
+archive published with each release and in the repository above.
+
+Third-party components retain their own licenses. Full license texts collected
+from the build distributions are included in licenses/ and embedded in the app.
+
+PySide6, Shiboken6 and Qt — Qt Project / The Qt Company
+https://doc.qt.io/qtforpython-6/licenses.html
+
+websocket-client — Apache License 2.0
+https://github.com/websocket-client/websocket-client
+
+python-qrcode — BSD License
+https://github.com/lincolnloop/python-qrcode
+
+Pillow — HPND License
+https://python-pillow.github.io/
+
+Python — Python Software Foundation License and bundled third-party notices
+https://docs.python.org/3/license.html
+
+PyInstaller bootloader — GPL with distribution exception
+https://pyinstaller.org/en/stable/license.html
+
+Microsoft VC runtime components are redistributed from the Qt Python wheels.
+OBS Studio is separate software, is not included, and is not affiliated with
+this project. No personal configuration, credentials or recordings are included.
