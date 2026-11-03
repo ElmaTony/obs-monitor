@@ -39,7 +39,7 @@ def source_files():
         if not file.is_file() or any(part in ('.git','__pycache__','node_modules','build','dist','release','work','.venv') for part in relative.parts):
             continue
         if len(relative.parts) == 1:
-            if file.suffix in ('.py','.cjs') or file.name.startswith('requirements') or file.name in allowed_root:
+            if file.suffix in ('.py','.cjs','.html') or file.name.startswith('requirements') or file.name in allowed_root:
                 yield file
         elif relative.parts[0] in ('.github','scripts','packaging','assets','licenses') and file.suffix not in ('.pyc','.log','.exe','.zip'):
             yield file
