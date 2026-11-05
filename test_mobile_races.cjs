@@ -189,13 +189,26 @@ async function timedOutPollRecoversAndMatchesVisualAvailability() {
   assert.equal(h.button('resume').disabled,false);
 }
 
+async function slowControlUsesTheDesktopConfirmationBudget() {
+  const h = harness();
+  await h.respond(h.pending('/api/status'), state(1, false, {control_timeout_ms:22000}));
+  const click = h.button('pause').listeners.click();
+  const request = h.pending('/api/control');
+  await h.advance(11000);
+  assert.equal(request.options.signal.aborted, false, 'A valid long confirmation must not be aborted at 10 seconds');
+  await h.respond(request, {ok:true,message:'Paused',state:state(5, true)}); await click;
+  assert.equal(h.button('resume').disabled, false);
+  assert.equal(h.requests.filter(r=>r.url==='/api/control').length, 1);
+}
+
 module.exports = {harness, state, flush};
 if (require.main === module) (async()=>{
   let failed=0;
   for(const test of [oldBusyResponseAfterSuccess,oldNetworkFailureAfterSuccess,soundToggleVersusPolling,
     repeatedPauseResumeWithReorderedResponses,blockedStorageStillLoadsAndControls,staleWhileBackgroundedAndPageResume,
     rejectedControlRefreshesStateWithoutRetry,unknownControlResultReconcilesWithoutReplay,newerPollWinsOverLateControlResponse,
-    duplicateTapDoesNotSendDuplicateCommand,failedSoundSaveRestoresServerState,timedOutPollRecoversAndMatchesVisualAvailability]) {
+    duplicateTapDoesNotSendDuplicateCommand,failedSoundSaveRestoresServerState,timedOutPollRecoversAndMatchesVisualAvailability,
+    slowControlUsesTheDesktopConfirmationBudget]) {
     try {await test();console.log('PASS',test.name);} catch(error){failed++;console.error('FAIL',test.name,error.message);}
   }
   if(failed) process.exitCode=1;

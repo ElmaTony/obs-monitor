@@ -43,6 +43,7 @@ class RemoteServer:
         self.identity = identity or PairingIdentity()
         self.server = None
         self.thread = None
+        self._accepting = threading.Event()
 
     @property
     def token(self):
@@ -94,6 +95,9 @@ class RemoteServer:
                     self.close_connection = True
 
             def authenticated(self):
+                if not owner._accepting.is_set():
+                    self.send_payload(503, {"ok": False, "message": "手机遥控已关闭"})
+                    return False
                 origin = self.headers.get("Origin")
                 if origin and origin != "http://" + self.headers.get("Host", ""):
                     self.send_payload(403, {"ok": False, "message": "请求来源无效"})
@@ -139,6 +143,14 @@ class RemoteServer:
                 except (ValueError, TypeError):
                     self.send_payload(400, {"ok": False, "message": "请求格式无效"})
                     return
+                # Reading a slow request body can overlap a desktop pairing reset.
+                # Do not let an already revoked credential change recording/settings.
+                if not owner._accepting.is_set():
+                    self.send_payload(503, {"ok": False, "message": "手机遥控已关闭，操作未执行"})
+                    return
+                if not hmac.compare_digest(self._pairing_token, owner.token):
+                    self.send_payload(401, {"ok": False, "message": "配对已重置，请使用电脑中的新链接重新连接"})
+                    return
                 path = urlsplit(self.path).path
                 if path == "/api/control":
                     if data.get("action") not in ("start", "stop", "pause", "resume"):
@@ -146,7 +158,7 @@ class RemoteServer:
                         return
                     future = owner.controller.submit(data["action"])
                     try:
-                        self.send_payload(200, future.result(timeout=7))
+                        self.send_payload(200, future.result(timeout=owner.controller.control_timeout))
                     except FutureTimeout:
                         cancelled = future.cancel()
                         message = "操作已取消，请稍后重试" if cancelled else "操作结果尚未确认，请查看 OBS 当前状态后再操作"
@@ -171,9 +183,11 @@ class RemoteServer:
         self.server.daemon_threads = True
         self.port = self.server.server_address[1]
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True, name="phone-remote")
+        self._accepting.set()
         self.thread.start()
 
     def stop(self):
+        self._accepting.clear()
         if self.server:
             self.server.shutdown()
             self.server.server_close()

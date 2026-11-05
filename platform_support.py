@@ -4,6 +4,7 @@ from ctypes import wintypes
 import json
 import math
 import os
+from functools import lru_cache
 from pathlib import Path
 import struct
 import wave
@@ -11,6 +12,39 @@ import winsound
 
 APP_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / "OBSAudioMonitor"
 SOUND_DIR = APP_DIR / "sounds"
+
+
+@lru_cache(maxsize=1)
+def _dwm_setter():
+    setter = ctypes.WinDLL("dwmapi").DwmSetWindowAttribute
+    setter.argtypes = (wintypes.HWND, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD)
+    setter.restype = ctypes.c_long
+    return setter
+
+
+def set_title_bar_theme(handle, dark, background, foreground):
+    """Keep the native caption; older Windows versions ignore unsupported colors."""
+    try:
+        setter = _dwm_setter()
+        colors = [int(value.lstrip("#"), 16) for value in (background, foreground)]
+        values = [(20, int(dark))]  # DWMWA_USE_IMMERSIVE_DARK_MODE
+        for attribute, rgb in zip((35, 36), colors):  # CAPTION_COLOR / TEXT_COLOR
+            values.append((attribute, (rgb & 255) << 16 | rgb & 0xff00 | rgb >> 16))
+        for attribute, value in values:
+            data = wintypes.DWORD(value)
+            setter(handle, attribute, ctypes.byref(data), ctypes.sizeof(data))
+    except (AttributeError, OSError):
+        pass
+
+
+def animations_enabled():
+    try:
+        enabled = wintypes.BOOL(True)
+        if ctypes.windll.user32.SystemParametersInfoW(0x1042, 0, ctypes.byref(enabled), 0):
+            return bool(enabled.value)  # SPI_GETCLIENTAREAANIMATION
+    except (AttributeError, OSError):
+        pass
+    return True
 
 def detect_obs_websocket_settings() -> tuple[str, int, str]:
     """Read local obs-websocket settings when the user has enabled the server."""
@@ -31,7 +65,7 @@ def detect_obs_websocket_settings() -> tuple[str, int, str]:
             continue
         try:
             port = int(raw.get("server_port", raw.get("port", 4455)))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             port = 4455
         password = raw.get("server_password", raw.get("password", ""))
         return "127.0.0.1", max(1, min(65535, port)), str(password or "")

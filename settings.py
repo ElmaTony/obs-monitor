@@ -24,6 +24,7 @@ class AppConfig:
     alert_enabled: bool = True
     threshold_gb: float = 2.0
     theme: str = "light"
+    help_seen: bool = False
 
     @classmethod
     def load(cls):
@@ -50,7 +51,7 @@ class AppConfig:
                     setattr(result, key, value)
             except (TypeError, ValueError, OverflowError):
                 pass
-        for key in ("remote_enabled", "sound_enabled", "alert_enabled"):
+        for key in ("remote_enabled", "sound_enabled", "alert_enabled", "help_seen"):
             if isinstance(raw.get(key), bool):
                 setattr(result, key, raw[key])
         if isinstance(raw.get("sound_actions"), dict):

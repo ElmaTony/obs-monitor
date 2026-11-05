@@ -146,6 +146,120 @@ class FakeOBS:
 
 
 class ControllerTests(unittest.TestCase):
+    def test_closing_while_confirmation_arrives_cannot_restore_connected_state(self):
+        self.controller._client = self.fake
+        original = self.fake.get_record_status
+        count = [0]
+        def closing_confirmation():
+            count[0] += 1
+            data = original()
+            if count[0] == 2:
+                self.controller.stop()
+            return data
+        self.fake.get_record_status = closing_confirmation
+        future = Future()
+        self.controller._execute('start', future, time.monotonic())
+        with self.assertRaises(core.OBSRequestError):
+            future.result()
+        self.assertFalse(self.controller.snapshot()['connected'])
+        self.assertFalse(any(kind == 'action' for kind, _ in self.events))
+
+    def test_obs_connection_cannot_change_during_an_unconfirmed_control(self):
+        self.controller._update(busy=True)
+        candidate = settings.AppConfig(obs_port=4567)
+        with patch.object(candidate, 'save') as save:
+            with self.assertRaisesRegex(ValueError, '操作'):
+                self.controller.apply_connection_config(candidate)
+        save.assert_not_called()
+        self.assertIs(self.controller.config, self.config)
+
+    def test_switching_obs_during_preflight_cannot_restore_or_control_old_obs(self):
+        self.controller._client = self.fake
+        candidate = settings.AppConfig(obs_host='192.0.2.2')
+        def switching_status():
+            with patch.object(candidate, 'save'):
+                self.controller.apply_connection_config(candidate)
+            return {'outputActive': True, 'outputBytes': 9999, 'outputDuration': 1000}
+        self.fake.get_record_status = switching_status
+        future = Future()
+        self.controller._execute('pause', future, time.monotonic())
+        with self.assertRaises(core.OBSRequestError):
+            future.result()
+        self.assertEqual(self.fake.requests, [])
+        self.assertEqual(self.controller.snapshot()['bytes'], 0)
+        self.assertFalse(self.controller.snapshot()['connected'])
+
+    def test_cancelled_pending_commands_can_be_drained_on_reconnect(self):
+        self.controller._observe({'outputActive': True})
+        first = self.controller.submit('pause')
+        second = self.controller.submit('stop')
+        self.assertTrue(first.cancel())
+        self.controller.reconnect()
+        self.assertTrue(first.cancelled())
+        with self.assertRaises(ConnectionError):
+            second.result(timeout=1)
+        self.assertTrue(self.controller._commands.empty())
+
+    def test_switching_obs_clears_old_data_and_rejects_queued_commands(self):
+        self.controller._observe({'outputActive': True, 'outputBytes': 200 * 1024**2,
+                                  'outputDuration': 10000})
+        pending = self.controller.submit('pause')
+        candidate = settings.AppConfig(obs_host='192.0.2.2')
+        with patch.object(candidate, 'save'):
+            self.controller.apply_connection_config(candidate)
+        state = self.controller.snapshot()
+        self.assertFalse(state['connected'])
+        self.assertEqual(state['bytes'], 0)
+        self.assertFalse(state['alerted'])
+        self.assertTrue(pending.done())
+        with self.assertRaises(ConnectionError):
+            pending.result()
+        self.assertFalse(any(state['allowed'].values()))
+
+    def test_closing_during_preflight_does_not_send_a_recording_command(self):
+        self.controller._client = self.fake
+        def closing_status():
+            self.controller.stop()
+            return {'outputActive': False}
+        self.fake.get_record_status = closing_status
+        future = Future()
+        self.controller._execute('start', future, time.monotonic())
+        self.assertTrue(future.done())
+        self.assertEqual(self.fake.requests, [])
+        with self.assertRaises(core.OBSRequestError):
+            future.result()
+
+    def test_stopped_controller_rejects_commands_even_with_a_last_connected_sample(self):
+        self.controller._observe({'outputActive': True, 'outputBytes': 1234})
+        self.controller.stop()
+        future = self.controller.submit('stop')
+        self.assertTrue(future.done())
+        with self.assertRaises(ConnectionError):
+            future.result()
+        self.assertTrue(self.controller._commands.empty())
+
+    def test_frame_rate_changed_without_reconnect_is_used_by_next_command(self):
+        self.connected()
+        self.fake.get_frame_interval = lambda: 1 / 5
+        started = time.monotonic()
+        self.controller.submit('start').result(timeout=2)
+        self.assertGreaterEqual(time.monotonic() - started, 0.6)
+
+    def test_slow_frame_rate_can_finish_its_stability_window(self):
+        clock = [0.0]
+        self.controller._client = self.fake
+        self.fake.get_frame_interval = lambda: 2.0
+        self.controller._settle_seconds = 6.0
+        def advance(seconds):
+            clock[0] += seconds
+            return False
+        future = Future()
+        with patch.object(core.time, 'monotonic', side_effect=lambda: clock[0]), \
+             patch.object(self.controller._stop, 'wait', side_effect=advance):
+            self.controller._execute('start', future, 0)
+        self.assertTrue(future.result()['ok'])
+        self.assertGreaterEqual(clock[0], 6)
+
     def test_rapid_controls_wait_for_encoder_pause_timestamps_to_clear(self):
         original = self.fake.request
         resumed_at = [None]
@@ -368,6 +482,27 @@ class ControllerTests(unittest.TestCase):
 
 
 class SettingsTests(unittest.TestCase):
+    def test_first_run_help_flag_is_persisted_and_legacy_config_defaults_to_unseen(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(settings, 'CONFIG_PATH', Path(tmp)/'config.json'), \
+             patch.object(settings, 'detect_obs_websocket_settings', return_value=('127.0.0.1',4455,'')), \
+             patch.object(settings, 'WindowsCredentialStore') as store:
+            store.return_value.read.return_value = ''
+            self.assertFalse(settings.AppConfig.load().help_seen)
+            settings.CONFIG_PATH.write_text('{"theme":"dark"}')
+            config = settings.AppConfig.load()
+            self.assertFalse(config.help_seen)
+            config.help_seen = True; config.save()
+            self.assertTrue(settings.AppConfig.load().help_seen)
+
+    def test_nonfinite_detected_obs_port_does_not_crash_startup(self):
+        import platform_support
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / 'obs-studio' / 'plugin_config' / 'obs-websocket' / 'config.json'
+            path.parent.mkdir(parents=True)
+            path.write_text('{"server_port": 1e309}', encoding='utf-8')
+            with patch.dict(platform_support.os.environ, {'APPDATA': temporary}):
+                self.assertEqual(platform_support.detect_obs_websocket_settings()[1], 4455)
+
     def test_json_replace_failure_restores_previous_password_and_json(self):
         with tempfile.TemporaryDirectory() as tmp, patch.object(settings, "CONFIG_PATH", Path(tmp)/"config.json"), patch.object(settings, "WindowsCredentialStore") as store:
             previous = '{"obs_port":4455}'
@@ -424,6 +559,212 @@ class SettingsTests(unittest.TestCase):
 
 
 class DesktopTests(unittest.TestCase):
+    def test_first_run_help_opens_once_keeps_refreshing_and_can_be_opened_manually(self):
+        self.app.show(); self.qt.processEvents()
+        with patch.object(self.config, 'save') as save:
+            self.app.show_first_run_help()
+            dialog = self.app.help_window
+            self.assertTrue(dialog.isVisible())
+            self.assertTrue(self.config.help_seen)
+            self.app.show_first_run_help()
+            self.app.show_help()
+            self.assertIs(self.app.help_window, dialog)
+            self.assertEqual(save.call_count, 1)
+        self.app.controller._observe({'outputActive':True,'outputBytes':123456})
+        self.app._tick()
+        self.assertEqual(self.app.size_exact_label.text(), '123,456 字节')
+        dialog.accept()
+        self.app.show_first_run_help()
+        self.assertFalse(dialog.isVisible())
+        self.app.show_help()
+        self.assertIs(self.app.help_window, dialog)
+        self.assertTrue(self.app.help_window.isVisible())
+        self.app.help_window.accept()
+
+    def test_reopened_app_does_not_show_first_run_help(self):
+        self.config.help_seen = True
+        self.app.show(); self.qt.processEvents()
+        self.app.show_first_run_help()
+        self.assertIsNone(self.app.help_window)
+
+    def test_first_run_help_save_failure_is_retryable_and_does_not_close_help(self):
+        self.app.show(); self.qt.processEvents()
+        with patch.object(self.config, 'save', side_effect=OSError('disk full')):
+            self.app.show_first_run_help()
+        self.assertFalse(self.config.help_seen)
+        self.assertTrue(self.app.help_window.isVisible())
+        with patch.object(self.config, 'save'):
+            self.app.show_first_run_help()
+        self.assertTrue(self.config.help_seen)
+        self.app.help_window.accept()
+
+    def test_saving_connection_settings_preserves_first_run_help_state(self):
+        self.config.help_seen = True
+        candidate = settings.AppConfig()
+        candidate.remote_enabled = False
+        with patch.object(settings.AppConfig, 'save'):
+            self.app.apply_settings(candidate)
+        self.assertTrue(self.app.config.help_seen)
+
+    def test_first_run_callback_after_close_does_not_open_dialog(self):
+        self.app.close()
+        with patch.object(self.config, 'save') as save:
+            self.app.show_first_run_help()
+        self.assertIsNone(self.app.help_window)
+        save.assert_not_called()
+
+    def test_number_fields_click_type_and_respect_limits(self):
+        from desktop_ui import NumberField
+        from PySide6.QtCore import Qt
+        from PySide6.QtTest import QTest
+        self.app.open_settings(); self.qt.processEvents()
+        fields = self.app.settings_window.findChildren(NumberField)
+        self.assertEqual(len(fields), 3)
+        for field in fields:
+            spin = field.spin
+            self.assertGreater(spin.lineEdit().width(), spin.width() // 2)
+            original = spin.value()
+            QTest.mouseClick(field.plus, Qt.MouseButton.LeftButton)
+            self.assertEqual(spin.value(), original + spin.singleStep())
+            QTest.mouseClick(field.minus, Qt.MouseButton.LeftButton)
+            self.assertEqual(spin.value(), original)
+            spin.setValue(spin.maximum())
+            self.assertFalse(field.plus.isEnabled())
+            spin.setValue(spin.minimum())
+            self.assertFalse(field.minus.isEnabled())
+        port = fields[0].spin
+        port.setFocus(); port.selectAll()
+        QTest.keyClicks(port, '6000')
+        QTest.keyClick(port, Qt.Key.Key_Up)
+        self.assertEqual(port.value(), 6001)
+
+    def test_theme_transition_blends_and_repeated_switches_keep_live_state(self):
+        from desktop_ui import PALETTES
+        from PySide6.QtCore import Qt
+        self.app.show(); self.qt.processEvents()
+        self.app.controller._observe({'outputActive':True, 'outputBytes':12345})
+        with patch('desktop_ui.animations_enabled', return_value=True), patch.object(self.config, 'save'):
+            self.app.apply_theme('dark')
+            self.assertIsNotNone(self.app._theme_animation)
+            self.app._theme_animation.setCurrentTime(120)
+            pixel = self.app.centralWidget().grab().toImage().pixelColor(0, 0)
+            self.assertNotIn(pixel.name(), (PALETTES['light']['bg'], PALETTES['dark']['bg']))
+            self.assertTrue(all(layer.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+                                for layer in self.app._theme_overlays))
+            self.app.controller._observe({'outputActive':True, 'outputPaused':True, 'outputBytes':54321})
+            self.app._tick()
+            self.app.apply_theme('light')
+            self.app._theme_animation.setCurrentTime(240)
+        self.assertIsNone(self.app._theme_animation)
+        self.assertEqual(self.app._theme_overlays, [])
+        self.assertEqual(self.app._title_colors['bg'], PALETTES['light']['bg'])
+        self.assertTrue(self.app.theme_buttons['light'].isChecked())
+        self.assertEqual(self.app.size_exact_label.text(), '54,321 字节')
+        self.assertTrue(self.app.action_buttons['resume'].isEnabled())
+
+    def test_failed_theme_save_during_transition_preserves_current_transition(self):
+        self.app.show(); self.qt.processEvents()
+        with patch('desktop_ui.animations_enabled', return_value=True), patch.object(self.config, 'save'):
+            self.app.apply_theme('dark')
+        animation = self.app._theme_animation
+        with patch.object(self.config, 'save', side_effect=OSError('disk full')):
+            self.app.apply_theme('light')
+        self.assertIs(self.app._theme_animation, animation)
+        self.assertEqual(self.config.theme, 'dark')
+        self.assertTrue(self.app.theme_buttons['dark'].isChecked())
+        animation.setCurrentTime(animation.duration())
+        self.assertIsNone(self.app._theme_animation)
+
+    def test_reduced_motion_and_resize_leave_no_transition_layer(self):
+        self.app.show(); self.qt.processEvents()
+        with patch('desktop_ui.animations_enabled', return_value=False), patch.object(self.config, 'save'):
+            self.app.apply_theme('dark')
+        self.assertIsNone(self.app._theme_animation)
+        with patch('desktop_ui.animations_enabled', return_value=True), patch.object(self.config, 'save'):
+            self.app.apply_theme('light')
+        self.assertIsNotNone(self.app._theme_animation)
+        self.app.resize(800, 560); self.qt.processEvents()
+        self.assertIsNone(self.app._theme_animation)
+        self.assertEqual(self.app._theme_overlays, [])
+
+    def test_switch_entire_visible_surface_accepts_clicks(self):
+        from PySide6.QtCore import QPoint, Qt
+        from PySide6.QtTest import QTest
+        self.app.show(); self.qt.processEvents()
+        with patch.object(self.config, 'save'):
+            QTest.mouseClick(self.app.sound_switch, Qt.MouseButton.LeftButton, pos=QPoint(34, 12))
+        self.assertFalse(self.app.sound_switch.isChecked())
+        self.assertFalse(self.config.sound_enabled)
+
+    def test_failed_theme_save_restores_the_selected_theme_button(self):
+        for theme in ('dark', 'light'):
+            with self.subTest(theme=theme), patch.object(self.config, 'save', side_effect=OSError('disk full')):
+                self.app.theme_buttons[theme].click()
+            self.assertTrue(self.app.theme_buttons['light'].isChecked())
+            self.assertFalse(self.app.theme_buttons['dark'].isChecked())
+            self.assertEqual(self.config.theme, 'light')
+
+    def remote_settings(self, port):
+        from PySide6.QtWidgets import QPushButton, QSpinBox
+        self.app.open_settings()
+        dialog = self.app.settings_window
+        dialog.findChildren(QSpinBox)[1].setValue(port)
+        return next(button for button in dialog.findChildren(QPushButton)
+                    if button.text() == '保存并应用')
+
+    def start_phone(self):
+        from pairing import PairingIdentity
+        self.app.pairing_identity = PairingIdentity()
+        self.app.remote = RemoteServer(self.app.controller, host='127.0.0.1', port=0,
+                                       identity=self.app.pairing_identity)
+        self.app.remote.start()
+        self.config.remote_port = self.app.remote.port
+        return self.app.remote
+
+    def test_occupied_new_phone_port_preserves_working_server_and_settings(self):
+        import socket
+        old = self.start_phone()
+        with socket.socket() as occupied:
+            occupied.bind(('0.0.0.0', 0)); occupied.listen()
+            save_button = self.remote_settings(occupied.getsockname()[1])
+            with patch.object(settings.AppConfig, 'save'), patch('desktop_ui.QMessageBox.warning'):
+                save_button.click()
+        self.assertIs(self.app.remote, old)
+        self.assertEqual(self.app.config.remote_port, old.port)
+        with urllib.request.urlopen(f'http://127.0.0.1:{old.port}/', timeout=2) as response:
+            self.assertEqual(response.status, 200)
+
+    def test_failed_save_after_preparing_new_port_releases_it_and_keeps_old_server(self):
+        import socket
+        old = self.start_phone()
+        with socket.socket() as reserve:
+            reserve.bind(('127.0.0.1', 0)); new_port = reserve.getsockname()[1]
+        save_button = self.remote_settings(new_port)
+        with patch.object(settings.AppConfig, 'save', side_effect=OSError('disk full')), \
+             patch('desktop_ui.QMessageBox.warning'):
+            save_button.click()
+        self.assertIs(self.app.remote, old)
+        with socket.socket() as available:
+            available.bind(('0.0.0.0', new_port))
+
+    def test_phone_port_change_preserves_pairing_and_closes_old_listener(self):
+        import socket
+        old = self.start_phone()
+        token = old.token
+        with socket.socket() as reserve:
+            reserve.bind(('127.0.0.1', 0)); new_port = reserve.getsockname()[1]
+        save_button = self.remote_settings(new_port)
+        with patch.object(settings.AppConfig, 'save'):
+            save_button.click()
+        self.assertIsNot(self.app.remote, old)
+        self.assertEqual(self.app.remote.token, token)
+        with socket.socket() as connection:
+            self.assertNotEqual(connection.connect_ex(('127.0.0.1', old.port)), 0)
+        request = urllib.request.Request(f'http://127.0.0.1:{new_port}/api/status',
+                                         headers={'X-OBS-Token': token})
+        with urllib.request.urlopen(request, timeout=2) as response:
+            self.assertIn('revision', json.load(response))
+
     def test_sound_save_failure_restores_visible_switch(self):
         with patch.object(self.config, "save", side_effect=OSError("save failed")):
             self.app.sound_switch.setChecked(False)

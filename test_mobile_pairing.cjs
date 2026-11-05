@@ -163,6 +163,54 @@ async function networkBackoffAndManualReconnectRecoverPairing() {
   assert.equal(h.button('pause').disabled, false);
 }
 
+async function oldUnauthorizedSoundResponseCannotEraseNewPairing() {
+  const h = harness(false, {hash:'#token='+savedToken}); await h.initial();
+  h.ids.sound.checked = false;
+  const change = h.ids.sound.listeners.change();
+  const oldSound = h.pending('/api/sound');
+  await h.advance(800);
+  await h.respond(h.pending('/api/status'), {message:'Pairing was reset'}, 401);
+  const replacement = 'B'.repeat(43);
+  h.ids.pairLink.value = 'http://pc:8765/#token='+replacement;
+  h.ids.pairConnect.listeners.click();
+  await h.respond(h.pending('/api/status'), state(20));
+  await h.respond(oldSound, {message:'Old token is no longer valid'}, 401); await change;
+  assert.equal(h.ids.pairing.hidden, true);
+  assert.equal(h.local.get('obs-token'), replacement);
+  assert.equal(h.button('pause').disabled, false);
+}
+
+async function oldControlResponseCannotUnpairAfterDesktopResetAndReconnection() {
+  const h = harness(false, {hash:'#token='+savedToken}); await h.initial();
+  const click = h.button('pause').listeners.click();
+  const oldControl = h.pending('/api/control');
+  h.events.pageshow();
+  await h.respond(h.pending('/api/status'), {message:'Pairing was reset'}, 401);
+  const replacement = 'C'.repeat(43);
+  h.ids.pairLink.value = 'http://pc:8765/#token='+replacement;
+  h.ids.pairConnect.listeners.click();
+  await h.respond(h.pending('/api/status'), state(30, true));
+  await h.respond(oldControl, {message:'Old token is no longer valid'}, 401); await click;
+  assert.equal(h.ids.pairing.hidden, true);
+  assert.equal(h.local.get('obs-token'), replacement);
+  assert.equal(h.button('resume').disabled, false);
+}
+
+async function oldSuccessfulResponseCannotOverwriteStateAfterNewPairing() {
+  const h = harness(false, {hash:'#token='+savedToken}); await h.initial();
+  h.ids.sound.checked = false;
+  const change = h.ids.sound.listeners.change();
+  const oldSound = h.pending('/api/sound');
+  await h.advance(800);
+  await h.respond(h.pending('/api/status'), {message:'Pairing was reset'}, 401);
+  h.ids.pairLink.value = 'http://pc:8765/#token='+'D'.repeat(43);
+  h.ids.pairConnect.listeners.click();
+  await h.respond(h.pending('/api/status'), state(20, false, {sound_enabled:true}));
+  await h.respond(oldSound, {ok:true,state:state(999, true, {sound_enabled:false})}); await change;
+  assert.equal(h.ids.sound.checked, true);
+  assert.equal(h.button('pause').disabled, false);
+}
+
 (async()=>{
   let failed = 0;
   const tests = [closeAndReopenBrowserAtRoot,cookieOnlyPairingWorksWithBlockedStorage,
@@ -171,7 +219,9 @@ async function networkBackoffAndManualReconnectRecoverPairing() {
     forgetClearsPairingOnlyAfterServerAcknowledges,failedForgetKeepsExistingPairing,
     forgettingDeviceCannotRaceRecordingOrLatePolling,lostConnectionMarksRetainedSizeAsOldData,
     restartedDesktopAcceptsLowerRevisionAndIgnoresOldInstance,hiddenPageStopsPollingAndImmediatelyResumes,
-    deviceSleepExpiresStateEvenWhenMonotonicClockStops,networkBackoffAndManualReconnectRecoverPairing];
+    deviceSleepExpiresStateEvenWhenMonotonicClockStops,networkBackoffAndManualReconnectRecoverPairing,
+    oldUnauthorizedSoundResponseCannotEraseNewPairing,oldControlResponseCannotUnpairAfterDesktopResetAndReconnection,
+    oldSuccessfulResponseCannotOverwriteStateAfterNewPairing];
   for (const test of tests) {
     try {await test();console.log('PASS',test.name);} catch(error){failed++;console.error('FAIL',test.name,error.message);}
   }

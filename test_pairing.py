@@ -49,6 +49,21 @@ class PairingIdentityTests(unittest.TestCase):
 
 
 class PersistentBrowserPairingTests(unittest.TestCase):
+    def test_stopping_remote_while_reading_body_prevents_late_mutation(self):
+        handler_type = self.server.server.RequestHandlerClass
+        authenticate = handler_type.authenticated
+        def stop_after_auth(handler):
+            result = authenticate(handler)
+            if result:
+                self.server.stop()
+            return result
+        with patch.object(handler_type, 'authenticated', stop_after_auth), \
+             patch.object(self.controller, 'set_sound_enabled') as change:
+            with self.assertRaises(urllib.error.HTTPError) as error:
+                self.request('/api/sound', token=True, data={'enabled': False})
+            self.assertEqual(error.exception.code, 503)
+            change.assert_not_called()
+
     def setUp(self):
         self.controller = OBSController(settings.AppConfig())
         self.identity = PairingIdentity()
@@ -126,6 +141,21 @@ class PersistentBrowserPairingTests(unittest.TestCase):
         with patch.object(self.controller, "snapshot", side_effect=rotate_while_producing_status):
             with self.request(token=True) as response:
                 self.assertIsNone(response.headers.get("Set-Cookie"))
+
+    def test_reset_during_post_body_read_revokes_the_request_before_mutation(self):
+        handler_type = self.server.server.RequestHandlerClass
+        authenticate = handler_type.authenticated
+        def rotate_after_auth(handler):
+            result = authenticate(handler)
+            if result:
+                self.server.reset_pairing()
+            return result
+        with patch.object(handler_type, 'authenticated', rotate_after_auth), \
+             patch.object(self.controller, 'set_sound_enabled') as change:
+            with self.assertRaises(urllib.error.HTTPError) as error:
+                self.request('/api/sound', token=True, data={'enabled': False})
+            self.assertEqual(error.exception.code, 401)
+            change.assert_not_called()
 
     def test_forget_removes_cookie_and_no_recording_request_is_sent(self):
         with self.request(token=True):

@@ -147,6 +147,11 @@ class OBSController:
         self._instance_id = uuid.uuid4().hex
         self._settle_seconds = 0.2
 
+    @property
+    def control_timeout(self):
+        with self._lock:
+            return max(7.0, self.confirmation_timeout + self._settle_seconds + 10.0)
+
     def snapshot(self):
         with self._lock:
             self._snapshot_revision += 1
@@ -157,7 +162,8 @@ class OBSController:
             state.update(sound_enabled=self.config.sound_enabled,
                          sound_actions=dict(self.config.sound_actions),
                          threshold_bytes=int(self.config.threshold_gb * 1024**3),
-                         alert_enabled=self.config.alert_enabled, alerted=self._alerted)
+                         alert_enabled=self.config.alert_enabled, alerted=self._alerted,
+                         control_timeout_ms=int(self.control_timeout * 1000))
         state["data_age_ms"] = None if sampled is None else max(0, int((time.monotonic() - sampled) * 1000))
         state["stale"] = not state["connected"] or sampled is None or state["data_age_ms"] > 3000
         state["size_text"] = format_size(state["bytes"]) if sampled is not None else "—"
@@ -183,7 +189,9 @@ class OBSController:
         self._thread.start()
 
     def stop(self):
-        self._stop.set()
+        with self._lock:
+            self._stop.set()
+            self._state.update(connected=False, busy=False, message="软件已关闭")
         self._wake.set()
         client = self._client
         if client:
@@ -193,21 +201,25 @@ class OBSController:
         self._fail_pending("软件已关闭")
 
     def reconnect(self):
-        self._reconnect.set()
+        with self._lock:
+            self._reconnect.set()
+            self._state.update(connected=False, message="正在重新连接 OBS…")
+            self._fail_pending("OBS 连接正在重置，请确认当前状态后重试")
         self._wake.set()
 
     def submit(self, action):
         future = Future()
-        if action not in REQUESTS:
-            future.set_exception(ValueError("未知操作"))
-        elif not self.snapshot()["connected"]:
-            future.set_exception(ConnectionError("OBS 尚未连接，请先在电脑上检查连接设置"))
-        else:
-            try:
-                self._commands.put_nowait((action, future, time.monotonic()))
-                self._wake.set()
-            except queue.Full:
-                future.set_exception(RuntimeError("操作过于频繁，请稍后重试"))
+        with self._lock:
+            if action not in REQUESTS:
+                future.set_exception(ValueError("未知操作"))
+            elif self._stop.is_set() or self._reconnect.is_set() or not self._state["connected"]:
+                future.set_exception(ConnectionError("OBS 尚未连接，请先在电脑上检查连接设置"))
+            else:
+                try:
+                    self._commands.put_nowait((action, future, time.monotonic()))
+                    self._wake.set()
+                except queue.Full:
+                    future.set_exception(RuntimeError("操作过于频繁，请稍后重试"))
         return future
 
     def set_sound_enabled(self, enabled):
@@ -247,6 +259,17 @@ class OBSController:
                 self.config.theme = old
                 raise
 
+    def mark_help_seen(self):
+        with self._lock:
+            if self.config.help_seen:
+                return
+            self.config.help_seen = True
+            try:
+                self.config.save()
+            except Exception:
+                self.config.help_seen = False
+                raise
+
     def apply_connection_config(self, candidate):
         # Settings dialogs and phone sound updates share a transaction. A sound
         # toggle received while a dialog is open must not be lost when it saves.
@@ -254,9 +277,23 @@ class OBSController:
             candidate.sound_enabled = self.config.sound_enabled
             candidate.sound_actions = dict(self.config.sound_actions)
             candidate.theme = self.config.theme
+            candidate.help_seen = self.config.help_seen
             previous = self.config
+            changed = any(getattr(candidate, key) != getattr(previous, key)
+                          for key in ("obs_host", "obs_port", "obs_password"))
+            if changed and self._state["busy"]:
+                raise ValueError("正在确认录制操作，请等待操作完成后再修改 OBS 连接")
             candidate.save(save_password=True)
             self.config = candidate
+            if changed:
+                self._reconnect.set()
+                self._state.update(connected=False, message="正在重新连接 OBS…")
+                if (candidate.obs_host, candidate.obs_port) != (previous.obs_host, previous.obs_port):
+                    self._last_observed = self._sampled_at = None
+                    self._alerted = False
+                    self._state.update(active=False, paused=False, bytes=0, duration_ms=0, last_file="")
+                self._fail_pending("OBS 连接设置已更改，旧操作已取消，请确认新连接的状态")
+                self._wake.set()
             return previous
 
     def _observe(self, data, notify=True):
@@ -302,10 +339,20 @@ class OBSController:
         try:
             if time.monotonic() - queued_at > 6:
                 raise OBSRequestError("操作等待超时，请确认当前状态后重试")
-            self._observe(self._client.get_record_status())
-            if not self.snapshot()["allowed"][action]:
-                raise OBSRequestError("当前状态不能" + LABELS[action])
-            self._update(busy=True)
+            if self._stop.is_set() or self._reconnect.is_set():
+                raise OBSRequestError("软件已关闭或 OBS 连接已重置，操作未执行")
+            data = self._client.get_record_status()
+            with self._lock:
+                if self._stop.is_set() or self._reconnect.is_set():
+                    raise OBSRequestError("软件已关闭或 OBS 连接已重置，操作未执行")
+                self._observe(data)
+                if not self.snapshot()["allowed"][action]:
+                    raise OBSRequestError("当前状态不能" + LABELS[action])
+                self._state["busy"] = True
+            # Video settings can change between recordings without reconnecting.
+            self._settle_seconds = max(0.2, 3 * self._client.get_frame_interval())
+            if self._stop.is_set() or self._reconnect.is_set():
+                raise OBSRequestError("软件已关闭或 OBS 连接已重置，操作未执行")
             response = self._client.request(REQUESTS[action])
             if action == "stop":
                 self._update(last_file=response.get("outputPath", ""))
@@ -314,11 +361,15 @@ class OBSController:
             # timestamps. A second pause during that interval is silently ignored by
             # OBS. Keep the transition busy for at least three video frame intervals,
             # and require the target state to stay stable throughout that window.
-            deadline = time.monotonic() + self.confirmation_timeout
+            deadline = time.monotonic() + self.confirmation_timeout + self._settle_seconds
             confirmed_since = None
-            while not self._stop.is_set():
-                self._observe(self._client.get_record_status(), notify=False)
-                state = self.snapshot()
+            while not self._stop.is_set() and not self._reconnect.is_set():
+                data = self._client.get_record_status()
+                with self._lock:
+                    if self._stop.is_set() or self._reconnect.is_set():
+                        raise OBSRequestError("软件已关闭或连接已重置，操作结果未确认")
+                    self._observe(data, notify=False)
+                    state = self.snapshot()
                 confirmed = {"start": state["active"], "stop": not state["active"],
                              "pause": state["active"] and state["paused"],
                              "resume": state["active"] and not state["paused"]}[action]
@@ -352,19 +403,27 @@ class OBSController:
                 _, future, _ = self._commands.get_nowait()
             except queue.Empty:
                 break
-            if not future.done():
+            if future.set_running_or_notify_cancel():
                 future.set_exception(ConnectionError(message))
 
     def _run(self):
         while not self._stop.is_set():
             client = None
             try:
-                self._reconnect.clear()
-                client = self.client_factory(self.config.obs_host, self.config.obs_port, self.config.obs_password)
+                with self._lock:
+                    self._reconnect.clear()
+                    config = self.config
+                client = self.client_factory(config.obs_host, config.obs_port, config.obs_password)
                 self._client = client
+                if self._stop.is_set():
+                    break
                 client.connect()
                 self._settle_seconds = max(0.2, 3 * client.get_frame_interval())
-                self._observe(client.get_record_status())
+                data = client.get_record_status()
+                with self._lock:
+                    if self._stop.is_set() or self._reconnect.is_set():
+                        continue
+                    self._observe(data)
                 self.on_event("log", "OBS 已连接")
                 self._last_error = ""
                 next_poll = time.monotonic() + self.interval
@@ -376,7 +435,10 @@ class OBSController:
                     if command:
                         self._execute(*command)
                     if time.monotonic() >= next_poll:
-                        self._observe(client.get_record_status())
+                        data = client.get_record_status()
+                        with self._lock:
+                            if not self._stop.is_set() and not self._reconnect.is_set():
+                                self._observe(data)
                         next_poll = time.monotonic() + self.interval
                     self._wake.wait(max(0.01, min(self.interval, next_poll - time.monotonic())))
                     self._wake.clear()

@@ -25,32 +25,30 @@ OBS Monitor 是一款 Windows 桌面工具。手机通过局域网网页连接�
 | 大小提醒 | 达到设定阈值后提醒，每次录制提醒一次 |
 | 连接恢复 | 断网自动重连，回到手机页面时立即更新状态 |
 | 桌面界面 | 紧凑布局、双主题、单实例运行 |
+| 首次指引 | 首次启动自动显示使用说明，之后可点右上角问号查看 |
 
 ## 下载
 
-当前版本：**2.1.1**。所有程序包均包含运行环境，无需安装 Python。
+当前版本：**2.2.2**。下载 **[Windows x64 单文件 EXE](https://github.com/ElmaTony/obs-monitor/releases/download/v2.2.2/obs-monitor-2.2.2-windows-x64.exe)** 后直接运行，无需安装 Python。本地项目中可运行根目录的 `obs-monitor.exe`。
 
-| 平台 | 安装版 | 免安装 ZIP | 单文件 EXE |
-| --- | --- | --- | --- |
-| Windows x64 | [下载](https://github.com/ElmaTony/obs-monitor/releases/download/v2.1.1/obs-monitor-2.1.1-windows-x64-setup.exe) | [下载](https://github.com/ElmaTony/obs-monitor/releases/download/v2.1.1/obs-monitor-2.1.1-windows-x64-portable.zip) | [下载](https://github.com/ElmaTony/obs-monitor/releases/download/v2.1.1/obs-monitor-2.1.1-windows-x64.exe) |
-| Windows ARM64 | [下载](https://github.com/ElmaTony/obs-monitor/releases/download/v2.1.1/obs-monitor-2.1.1-windows-arm64-setup.exe) | [下载](https://github.com/ElmaTony/obs-monitor/releases/download/v2.1.1/obs-monitor-2.1.1-windows-arm64-portable.zip) | [下载](https://github.com/ElmaTony/obs-monitor/releases/download/v2.1.1/obs-monitor-2.1.1-windows-arm64.exe) |
+[SHA-256 校验清单](https://github.com/ElmaTony/obs-monitor/releases/download/v2.2.2/SHA256SUMS.txt) · [当前版本源码](https://github.com/ElmaTony/obs-monitor/tree/v2.2.2) · [历史发行版本](https://github.com/ElmaTony/obs-monitor/releases)
 
-- **安装版**：带开始菜单入口和卸载功能，适合日常使用。
-- **免安装 ZIP**：完整解压后运行 `obs-monitor.exe`，保留同目录中的依赖文件。
-- **单文件 EXE**：下载后直接运行。
-- **架构选择**：Intel / AMD 电脑通常选择 x64；Windows ARM 设备选择 ARM64。不确定时查看 Windows 设置中的“系统类型”。
-
-[完整源码](https://github.com/ElmaTony/obs-monitor/releases/download/v2.1.1/obs-monitor-2.1.1-source.zip) · [SHA-256 校验清单](https://github.com/ElmaTony/obs-monitor/releases/download/v2.1.1/SHA256SUMS.txt) · [全部发行版本](https://github.com/ElmaTony/obs-monitor/releases)
-
-系统要求：Windows 10 / 11 x64，或 Windows 11 ARM64。需要另外安装支持 **WebSocket v5** 的 OBS Studio。
+系统要求：Windows 10 / 11 x64，需要另外安装支持 **WebSocket v5** 的 OBS Studio。源码测试同时覆盖 Windows x64 与 ARM64；本版提供 x64 单文件程序。
 
 ## 快速开始
 
 ### 电脑端
 
 1. 打开 OBS，在 **工具 → WebSocket 服务器设置** 中启用服务器，默认端口为 `4455`。
-2. 运行 OBS Monitor。工具会尝试读取本机 OBS 配置；未连接时，点击右上角 **设置**，填写与 OBS 一致的地址、端口和密码。
+2. 运行 OBS Monitor，首次启动会自动显示使用说明。工具会尝试读取本机 OBS 配置；未连接时，点击右上角 **设置**，填写与 OBS 一致的地址、端口和密码。
 3. 连接成功后，用四个录制按钮控制 OBS。声音开关和各操作的试听按钮位于右侧。
+
+<details>
+<summary>查看设置界面</summary>
+
+<p><img src="assets/settings-dark.png" width="470" alt="深色设置界面，同色标题栏与减号、加号调节按钮，使用示例设置"></p>
+
+</details>
 
 ### 手机端
 
@@ -61,7 +59,9 @@ OBS Monitor 是一款 Windows 桌面工具。手机通过局域网网页连接�
 <details>
 <summary>查看手机界面</summary>
 
-<p><img src="assets/mobile-light.jpg" width="320" alt="手机端录制控制与配对状态，使用示例数据"></p>
+<p><img src="assets/mobile-light.png" width="320" alt="手机端录制控制与配对状态，使用示例数据"></p>
+
+<p><img src="assets/mobile-dark.png" width="320" alt="深色手机控制界面，使用示例数据"></p>
 
 </details>
 
@@ -111,15 +111,15 @@ OBS Monitor 是一款 Windows 桌面工具。手机通过局域网网页连接�
 ## 开发
 
 <details>
-<summary>源码运行、测试与打包</summary>
+<summary>源码运行与测试</summary>
 
-源码运行使用 Windows 和 Python 3.12；手机脚本测试需要 Node.js 22 或更新版本，生成安装包还需要 [Inno Setup](https://jrsoftware.org/isinfo.php)。
+源码运行使用 Windows 和 Python 3.12；手机脚本测试需要 Node.js 22 或更新版本。
 
 ```powershell
 git clone https://github.com/ElmaTony/obs-monitor.git
 cd obs-monitor
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements-build.txt
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
 .\.venv\Scripts\python.exe main.py
 ```
 
@@ -132,17 +132,7 @@ node test_mobile_races.cjs
 node test_mobile_pairing.cjs
 ```
 
-生成 x64 发布包：
-
-```powershell
-.\.venv\Scripts\python.exe scripts/build_release.py --arch x64 --iscc "C:/Program Files/Inno Setup 7/ISCC.exe"
-```
-
-ARM64 使用原生 Windows ARM64 Python，将参数改为 `--arch arm64`。默认产物位于 `release/`，临时文件位于 `build/`；可用 `--output` 和 `--work` 指定其他目录。
-
-推送与 `version.py` 一致的版本标签后，GitHub Actions 分别在 x64 和 ARM64 环境中构建与验收；两种架构均通过后，自动发布正式 Release。手动运行构建工作流只生成可下载的构建产物。
-
-测试覆盖录制控制、原始字节、声音、设置、持久配对、连接恢复、乱序响应和发布归档。成品验收使用隔离的模拟 OBS 服务；实际手机网络、防火墙与扬声器仍需在使用环境确认。
+测试覆盖录制控制、原始字节、声音、设置、持久配对、连接恢复和乱序响应。实际手机网络、防火墙与扬声器仍需在使用环境确认。
 
 贡献约定见 [CONTRIBUTING.md](CONTRIBUTING.md)，安全说明见 [SECURITY.md](SECURITY.md)。
 

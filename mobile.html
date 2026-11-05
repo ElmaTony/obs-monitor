@@ -3,50 +3,49 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <meta name="theme-color" content="#0c1018">
+  <meta name="theme-color" content="#f3f4f6">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <title>OBS Monitor · 手机遥控</title>
   <style>
-
-    :root{color-scheme:light;--bg:#f4f6fa;--panel:#fff;--line:#e4e9f2;--muted:#7d8a9f;--text:#17233b;--red:#d7475e;--green:#14866a;--accent:#4263eb;--subtle:#f6f8fc;--warning:#a66e17;--notice-bg:#fff0f2}
-    :root[data-theme="dark"]{color-scheme:dark;--bg:#10151f;--panel:#192130;--line:#2d384c;--muted:#98a7bf;--text:#edf2fb;--red:#ff8797;--green:#65d8b0;--accent:#8ca5ff;--subtle:#202a3b;--warning:#edc17a;--notice-bg:#422b39}
-    *{box-sizing:border-box}
-    body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,"Microsoft YaHei",sans-serif;-webkit-tap-highlight-color:transparent}
-    button,input{font:inherit}button{touch-action:manipulation;cursor:pointer}button:disabled{cursor:default}
-    button:focus-visible,a:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
-    main{max-width:500px;margin:auto;padding:28px 22px calc(28px + env(safe-area-inset-bottom))}
-    .top{display:flex;align-items:center;justify-content:space-between;margin-bottom:28px}.brand{display:flex;align-items:center;gap:11px}
-    .logo{width:36px;height:36px;border-radius:12px;background:#4263eb;display:grid;place-items:center}.logo:before{content:"";height:11px;width:11px;border-radius:50%;background:#fff}
-    .brand b{display:block;font-size:17px;letter-spacing:-.4px}.brand small{font-size:9px;letter-spacing:1px;color:var(--muted)}
-    .theme-button{border:1px solid var(--line);color:var(--muted);background:var(--panel);border-radius:10px;padding:8px 10px;font-size:11px;line-height:1.5;min-height:34px}
-    .badge{font-size:11px;display:flex;align-items:center;gap:6px;color:var(--muted)}.dot{height:6px;width:6px;border-radius:50%;background:currentColor}.badge.online{color:var(--green)}
-    h1{font-size:25px;letter-spacing:-.5px;margin:0}.hero{background:var(--panel);border:1px solid var(--line);border-radius:22px;padding:24px;margin-bottom:23px}
-    .hero-top{display:flex;align-items:center;justify-content:space-between}.state{font-size:13px;font-weight:650;display:flex;align-items:center;gap:7px}.live .state{color:var(--red)}.paused .state{color:var(--warning)}
-    .caps{font-size:10px;letter-spacing:1.8px;color:var(--muted)}.clock{font-variant-numeric:tabular-nums;font-family:ui-monospace,Consolas,monospace;font-size:clamp(38px,12vw,53px);letter-spacing:-2.5px;line-height:1.2;margin:25px 0 7px}
-    .clock-label{font-size:12px;color:var(--muted);margin-bottom:22px}.divider{height:1px;background:var(--line);margin-bottom:22px}.size-row{display:flex;align-items:end;justify-content:space-between}
-    .label{font-size:12px;color:var(--muted)}.size{font-size:27px;letter-spacing:-1px;font-variant-numeric:tabular-nums;margin-top:5px;font-weight:650}.limit{font-size:12px;color:var(--muted);padding-bottom:5px}
-    .track{height:4px;overflow:hidden;background:var(--subtle);border-radius:4px;margin:15px 0 10px}.fill{height:100%;width:0;background:var(--accent);border-radius:4px;transition:width .5s}.hint{font-size:11px;line-height:1.7;color:var(--muted)}
-    .section-head{display:flex;justify-content:space-between;align-items:center;margin:0 2px 13px}.section-head b{font-size:14px}.section-head span{font-size:10px;color:var(--muted)}
-    .actions{display:grid;grid-template-columns:1fr 1fr;gap:11px}.action{appearance:none;-webkit-appearance:none;border:1px solid var(--line);border-radius:16px;background:var(--panel);color:var(--text);padding:18px;text-align:left;min-height:100px;transition:transform .15s}
-    .action:active:enabled{transform:scale(.97)}.action .icon{display:block;margin-bottom:12px;height:18px;line-height:18px;font-size:18px}.action b{font-size:15px;font-weight:650}
-    .action.primary{background:#4263eb;border-color:#4263eb;color:#fff}.action:disabled{opacity:1;background:var(--subtle);border-color:var(--line);color:var(--muted)}
-    .action.pause[data-available="true"]{background:#fff4d9;border-color:#e7c882;color:#7d540f}.action.resume[data-available="true"]{background:#e6f7f0;border-color:#9bdbc3;color:#14654e}.action.stop[data-available="true"]{background:#fff0f2;border-color:#edb7c0;color:#ae3047}
-    :root[data-theme="dark"] .action.pause[data-available="true"]{background:#403425;border-color:#796239;color:#f4d194}:root[data-theme="dark"] .action.resume[data-available="true"]{background:#193d35;border-color:#366c5c;color:#82e2bf}:root[data-theme="dark"] .action.stop[data-available="true"]{background:#422937;border-color:#774452;color:#ff9bad}
-    .sound{display:flex;align-items:center;justify-content:space-between;gap:20px;background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:17px 18px;margin-top:22px}.sound b{font-size:13px}.sound p{font-size:11px;color:var(--muted);margin:5px 0 0}
-    .switch{position:relative;display:block;flex-shrink:0;width:43px;height:25px}.switch input{opacity:0;width:100%;height:100%;margin:0;position:absolute;z-index:2;cursor:pointer}.switch span{position:absolute;inset:0;background:var(--muted);border-radius:25px}
-    .switch span:after{content:"";position:absolute;width:19px;height:19px;left:3px;top:3px;border-radius:50%;background:#fff;transition:transform .2s}.switch input:checked+span{background:var(--accent)}.switch input:checked+span:after{transform:translateX(18px)}.switch input:focus-visible+span{outline:2px solid var(--accent);outline-offset:3px}
-    .notice{display:none;background:var(--notice-bg);color:var(--red);padding:13px 16px;font-size:12px;line-height:1.7;border-radius:13px;margin-bottom:18px;overflow-wrap:anywhere}.notice.show{display:block}
-    .pairing{border:1px solid var(--line);border-radius:16px;background:var(--panel);padding:18px;margin-bottom:18px;font-size:13px}.pairing p{font-size:12px;color:var(--muted);line-height:1.8}.pairing input{width:100%;min-height:42px;border:1px solid var(--line);border-radius:9px;padding:9px;background:var(--subtle);color:var(--text);font-size:16px;margin-bottom:10px}
-    .pairing .theme-button{color:#fff;background:#4263eb;border-color:#4263eb;min-height:40px}.reconnect{margin-bottom:18px;color:var(--accent)}.pairing-footer{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:18px;font-size:10px;color:var(--muted)}.pairing-footer button{flex-shrink:0}
-    .pairing[hidden],.reconnect[hidden]{display:none}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
-    .foot{font-size:11px;text-align:center;line-height:1.9;color:var(--muted);margin-top:22px}.toast{position:fixed;bottom:30px;left:50%;transform:translate(-50%,12px);max-width:90vw;background:var(--text);color:var(--panel);box-shadow:0 8px 28px #17233b20;border-radius:14px;padding:13px 19px;font-size:13px;opacity:0;transition:.2s;pointer-events:none;z-index:10}.toast.show{opacity:1;transform:translate(-50%,0)}
-    @media(min-width:700px){main{padding-top:42px}.hero{padding:28px}.actions{gap:14px}}
+    :root{color-scheme:light;--bg:#f3f4f6;--panel:#fcfcfd;--line:#dfe2e8;--muted:#717887;--text:#252932;--red:#bb5050;--accent:#4f6fae;--subtle:#eceef2;--soft:#eaf0fb;--warning:#976823;--notice-bg:#faeded;--on-accent:#fff}
+    :root[data-theme="dark"]{color-scheme:dark;--bg:#14161b;--panel:#1d2027;--line:#363c48;--muted:#9da5b5;--text:#eceef4;--red:#eb9290;--accent:#9fb7e9;--subtle:#262a33;--soft:#2c364b;--warning:#dec18c;--notice-bg:#412c2b;--on-accent:#192231}
+    *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,"Microsoft YaHei",sans-serif;-webkit-tap-highlight-color:transparent}
+    button,input{font:inherit}button{touch-action:manipulation;cursor:pointer}button:disabled{cursor:default}button:focus-visible,a:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+    main{max-width:460px;margin:auto;padding:22px 20px calc(20px + env(safe-area-inset-bottom))}
+    .top{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:27px}.brand{display:flex;align-items:center;gap:10px}
+    .logo{width:34px;height:34px;border-radius:10px;background:#4f6fae;display:grid;place-items:center}.logo:before{content:"";height:12px;width:12px;border:2px solid #fff;border-radius:50%;box-shadow:inset 0 0 0 2px #4f6fae;background:#fff}
+    .brand b{display:block;font-size:16px;letter-spacing:-.5px;font-weight:650}.brand small{display:block;font-size:10px;letter-spacing:1px;color:var(--muted);margin-top:3px}
+    .theme-button{appearance:none;border:1px solid var(--line);color:var(--muted);background:var(--panel);border-radius:9px;padding:7px 10px;font-size:11px;line-height:1.5;min-height:34px}
+    .page-heading{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:14px}h1{font-size:22px;font-weight:600;letter-spacing:-.7px;margin:0}
+    .badge{font-size:11px;display:flex;align-items:center;gap:6px;color:var(--muted)}.dot{display:inline-block;flex-shrink:0;height:6px;width:6px;border-radius:50%;background:currentColor}.badge.online{color:var(--accent)}
+    .hero{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:20px;padding:21px 23px 18px;margin-bottom:22px;box-shadow:0 8px 24px #10182804}
+    .hero-top{display:flex;align-items:center;justify-content:space-between}.state{font-size:12px;font-weight:600;display:flex;align-items:center;gap:7px;color:var(--muted)}.live .state{color:var(--red)}.paused .state{color:var(--warning)}
+    .caps{font-size:9px;letter-spacing:1.9px;color:var(--muted)}.clock{font-variant-numeric:tabular-nums;font-family:ui-monospace,"Cascadia Mono",Consolas,monospace;font-size:clamp(35px,11.6vw,48px);font-weight:400;letter-spacing:-2px;line-height:1.2;margin:24px 0 5px;white-space:nowrap}
+    .clock-label{font-size:11px;color:var(--muted);margin-bottom:21px}.divider{height:1px;background:var(--line);margin-bottom:17px}.size-row{display:flex;align-items:end;justify-content:space-between;gap:10px}
+    .label{font-size:11px;color:var(--muted)}.size{font-size:28px;letter-spacing:-1px;font-variant-numeric:tabular-nums;margin-top:4px;font-weight:550;line-height:1.2}.limit{font-size:11px;color:var(--muted);padding-bottom:3px;text-align:right;max-width:45%}
+    .track{height:3px;overflow:hidden;background:var(--subtle);border-radius:4px;margin:16px 0 8px}.fill{height:100%;width:0;background:var(--accent);border-radius:4px;transition:width .4s}.hint{font-size:10px;line-height:1.7;color:var(--muted);overflow-wrap:anywhere}
+    .section-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin:0 1px 11px}.section-head b{font-size:13px;font-weight:600}.section-head span{font-size:10px;color:var(--muted)}
+    .actions{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px}.action{appearance:none;-webkit-appearance:none;display:flex;align-items:center;gap:12px;border:1px solid var(--line);border-radius:13px;background:var(--panel);color:var(--text);padding:15px;min-height:66px;text-align:left;transition:transform .12s,background .15s}
+    .action:active:enabled{transform:scale(.98)}.action .icon{display:grid;place-items:center;width:28px;height:28px;flex-shrink:0;border:1px solid currentColor;border-radius:9px;opacity:.9}.icon svg{width:14px;height:14px;fill:currentColor}.action b{font-size:13px;font-weight:600;white-space:nowrap}
+    .action.primary{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}.action.pause[data-available="true"]{background:var(--panel);border-color:var(--warning);color:var(--warning)}.action.resume[data-available="true"]{background:var(--soft);border-color:var(--accent);color:var(--accent)}.action.stop[data-available="true"]{background:var(--panel);border-color:var(--red);color:var(--red)}
+    .action:disabled{opacity:1;background:var(--subtle);border-color:var(--line);color:var(--muted)}.action:disabled .icon{opacity:.42}
+    .sound{display:flex;align-items:center;justify-content:space-between;gap:16px;background:var(--panel);border:1px solid var(--line);border-radius:13px;padding:16px;margin-top:18px}.sound b{font-size:12px;font-weight:600}.sound p{font-size:10px;color:var(--muted);margin:4px 0 0}
+    .switch{position:relative;display:block;flex-shrink:0;width:40px;height:24px}.switch input{opacity:0;width:100%;height:100%;margin:0;position:absolute;z-index:2;cursor:pointer}.switch span{position:absolute;inset:0;background:var(--muted);border-radius:24px}.switch span:after{content:"";position:absolute;width:18px;height:18px;left:3px;top:3px;border-radius:50%;background:#fff;transition:transform .2s}.switch input:checked+span{background:var(--accent)}.switch input:checked+span:after{transform:translateX(16px)}.switch input:disabled+span{opacity:.45}.switch input:focus-visible+span{outline:2px solid var(--accent);outline-offset:3px}
+    .notice{display:none;background:var(--notice-bg);color:var(--red);padding:12px 15px;font-size:12px;line-height:1.7;border-radius:12px;margin-bottom:14px;overflow-wrap:anywhere}.notice.show{display:block}
+    .pairing{border:1px solid var(--line);border-radius:15px;background:var(--panel);padding:18px;margin-bottom:16px;font-size:13px}.pairing p{font-size:12px;color:var(--muted);line-height:1.8}.pairing input{width:100%;min-height:44px;border:1px solid var(--line);border-radius:8px;padding:10px;background:var(--subtle);color:var(--text);font-size:16px;margin-bottom:10px}.pairing .theme-button{color:var(--on-accent);background:var(--accent);border-color:var(--accent);min-height:42px;width:100%}
+    .reconnect{margin-bottom:16px;color:var(--accent)}.pairing-footer{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:17px;font-size:10px;color:var(--muted)}.pairing-footer button{flex-shrink:0;background:transparent;border-color:transparent;padding-right:0}.pairing[hidden],.reconnect[hidden]{display:none}
+    .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}.foot{font-size:10px;text-align:center;line-height:1.9;color:var(--muted);margin:19px 0 0}.toast{position:fixed;bottom:calc(24px + env(safe-area-inset-bottom));left:50%;transform:translate(-50%,8px);max-width:90vw;background:var(--text);color:var(--panel);box-shadow:0 8px 28px #10182820;border-radius:12px;padding:12px 17px;font-size:12px;opacity:0;transition:.2s;pointer-events:none;z-index:10}.toast.show{opacity:1;transform:translate(-50%,0)}
+    body,.hero,.badge,.state,.label,.size,.limit,.hint,.clock-label,.section-head,.section-head span,.action,.sound,.sound p,.pairing,.pairing p,.pairing input,.pairing-footer,.foot,.theme-button,.brand small,.caps,.notice,.divider,.track,.switch span{transition:background-color .24s ease-in-out,color .24s ease-in-out,border-color .24s ease-in-out,box-shadow .24s ease-in-out}
+    .action{transition:transform .12s,background-color .24s ease-in-out,color .24s ease-in-out,border-color .24s ease-in-out}
+    .fill{transition:width .4s,background-color .24s ease-in-out}
+    @media(max-width:350px){main{padding:18px 14px}.hero{padding:19px}.action{padding:12px;gap:8px}.badge{font-size:10px}}
+    @media(prefers-reduced-motion:reduce){*,*::before,*::after{transition:none!important;animation:none!important}}
   </style>
 </head>
 <body>
 <main>
-  <header class="top"><div class="brand"><div class="logo"></div><div><b>OBS Monitor</b><small>手机遥控</small></div></div><button id="theme" class="theme-button" aria-label="切换浅色深色主题">☾ 深色</button></header>
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px"><h1 style="margin:0">录制工作台</h1><div id="connection" class="badge"><i class="dot"></i><span>正在连接</span></div></div>
+  <header class="top"><div class="brand"><div class="logo"></div><div><b>OBS Monitor</b><small>手机遥控台</small></div></div><button id="theme" class="theme-button" aria-label="切换浅色深色主题">☾ 深色</button></header>
+  <div class="page-heading"><h1>录制工作台</h1><div id="connection" class="badge"><i class="dot"></i><span>正在连接</span></div></div>
   <div id="notice" class="notice" role="alert"></div>
   <section id="pairing" class="pairing" hidden aria-label="连接电脑">
     <b>连接你的电脑</b><p>粘贴电脑工具中的完整控制链接，或扫描二维码。配对后可关闭浏览器，下次自动恢复。</p>
@@ -55,7 +54,7 @@
   </section>
   <button id="retry" class="theme-button reconnect" hidden>重新连接</button>
   <section class="hero" id="hero" aria-label="录制状态">
-    <div class="hero-top"><div class="state"><i class="dot"></i><span id="state">等待连接</span></div><span class="caps">OBS STUDIO</span></div>
+    <div class="hero-top"><div class="state"><i class="dot"></i><span id="state">等待连接</span></div><span class="caps">CURRENT SESSION</span></div>
     <div id="clock" class="clock">00:00:00</div><div class="clock-label">录制时长</div><div class="divider"></div>
     <div class="size-row"><div><div class="label">实时录制大小</div><div id="size" class="size">—</div></div><div id="limit" class="limit"></div></div>
     <div id="exactSize" class="hint" style="margin-top:6px;font-variant-numeric:tabular-nums">尚未收到 OBS 数据</div>
@@ -63,14 +62,14 @@
   </section>
   <div class="section-head"><b>录制控制</b><span id="commandState">与电脑状态同步</span></div>
   <div class="actions">
-    <button class="action primary" data-action="start" disabled><span class="icon">●</span><b>开始录制</b></button>
-    <button class="action pause" data-action="pause" disabled><span class="icon">Ⅱ</span><b>暂停录制</b></button>
-    <button class="action resume" data-action="resume" disabled><span class="icon">▶</span><b>继续录制</b></button>
-    <button class="action stop" data-action="stop" disabled><span class="icon">■</span><b>结束录制</b></button>
+    <button class="action primary" data-action="start" disabled><span class="icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="7"/></svg></span><b>开始录制</b></button>
+    <button class="action pause" data-action="pause" disabled><span class="icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="5" y="4" width="5" height="16" rx="1"/><rect x="14" y="4" width="5" height="16" rx="1"/></svg></span><b>暂停录制</b></button>
+    <button class="action resume" data-action="resume" disabled><span class="icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 3l15 9-15 9z"/></svg></span><b>继续录制</b></button>
+    <button class="action stop" data-action="stop" disabled><span class="icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/></svg></span><b>结束录制</b></button>
   </div>
   <div class="sound"><div><b>电脑操作提示音</b><p>开始 / 结束 / 暂停 / 继续时播放</p></div><label class="switch"><input id="sound" type="checkbox" aria-label="电脑操作提示音" disabled><span></span></label></div>
   <div class="pairing-footer"><span id="pairingStatus">连接后自动记住此浏览器</span><button id="forget" class="theme-button" disabled>忘记此设备</button></div>
-  <p class="foot">手机与电脑保持同一 Wi-Fi，电脑软件保持运行。<br>可关闭浏览器，下次访问自动恢复 · v__APP_VERSION__</p>
+  <p class="foot">同一网络连接 · 电脑工具保持运行<br>OBS MONITOR / v__APP_VERSION__</p>
 </main>
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 <script>
@@ -82,7 +81,7 @@
   function applyTheme() {
     document.documentElement.dataset.theme = theme;
     $('theme').textContent = theme === 'dark' ? '☀ 浅色' : '☾ 深色';
-    document.querySelector('meta[name="theme-color"]').content = theme === 'dark' ? '#10151f' : '#f4f6fa';
+    document.querySelector('meta[name="theme-color"]').content = theme === 'dark' ? '#14161b' : '#f3f4f6';
   }
   applyTheme();
   $('theme').addEventListener('click', () => {
@@ -106,10 +105,13 @@
   const retiredInstances = new Set();
   let pendingControl = false, soundBusy = false, pairingBusy = false, stopped = false, toastTimer;
   let pollTimer, statusFlight = null, statusGeneration = 0, pollFailures = 0;
+  let pairingGeneration = 0;
 
   async function api(path, body, suppliedController) {
+    const generation = pairingGeneration;
     const controller = suppliedController || new AbortController();
-    const timeout = setTimeout(() => controller.abort(), body === undefined ? 4000 : 10000);
+    const controlTimeout = Number.isFinite(current?.control_timeout_ms) ? Math.max(10000, current.control_timeout_ms + 3000) : 10000;
+    const timeout = setTimeout(() => controller.abort(), body === undefined ? 4000 : path === '/api/control' ? Math.min(2147483647, controlTimeout) : 10000);
     try {
       const response = await fetch(path, {
         method: body === undefined ? 'GET' : 'POST',
@@ -117,12 +119,16 @@
         body: body === undefined ? undefined : JSON.stringify(body), signal: controller.signal, cache: 'no-store', credentials: 'same-origin'
       });
       const value = await response.json();
+      if (generation !== pairingGeneration) throw Object.assign(new Error('配对状态已更新'), {obsolete:true});
       if (!response.ok) {
         const error = new Error(value.message || '操作失败');
         error.status = response.status;
         throw error;
       }
       return value;
+    } catch (error) {
+      if (generation !== pairingGeneration) error.obsolete = true;
+      throw error;
     } finally {clearTimeout(timeout);}
   }
   function toast(message) {
@@ -154,7 +160,7 @@
     if (!current) {enableButtons(); return;}
     $('pairing').hidden = true;
     $('retry').hidden = true;
-    $('pairingStatus').textContent = '已配对 · 关闭浏览器后可自动恢复';
+    $('pairingStatus').textContent = '已配对 · 下次访问自动连接';
     const live = !expired();
     $('connection').classList.toggle('online', live);
     $('connection').lastElementChild.textContent = live ? 'OBS 已连接' : current.connected ? '数据已过期' : 'OBS 未连接';
@@ -206,6 +212,8 @@
     notice(message || '无法连接电脑，请检查 Wi-Fi 和电脑软件是否开启。');
   }
   function requirePairing(message) {
+    pairingGeneration++;
+    cancelStatus();
     stopped = true;
     token = '';
     rememberToken('');
@@ -237,7 +245,7 @@
         if (generation === statusGeneration) {render(state); pollFailures = 0;}
       } catch (error) {
         // Superseded responses and errors must never overwrite a later control result.
-        if (generation !== statusGeneration) return;
+        if (generation !== statusGeneration || error.obsolete) return;
         pollFailures++;
         if (error.status === 401) requirePairing(error.message);
         else offline(error.name === 'AbortError' ? '连接超时，正在重试…' : error.status ? error.message : '暂时无法连接电脑，恢复网络后会自动重连。');
@@ -262,6 +270,7 @@
       render(result.state);
       toast(result.message);
     } catch (error) {
+      if (error.obsolete) return;
       if (error.status === 401) requirePairing(error.message);
       toast(error.name === 'AbortError' ? '操作结果尚未确认，正在更新当前状态。' : error.message);
     } finally {
@@ -281,6 +290,7 @@
       render(result.state);
       toast(enabled ? '电脑提示音已开启' : '电脑提示音已关闭');
     } catch (error) {
+      if (error.obsolete) return;
       if (error.status === 401) requirePairing(error.message);
       toast(error.message);
     } finally {
@@ -305,6 +315,7 @@
       const nextToken = new URLSearchParams(link.hash.slice(1)).get('token');
       if (link.origin !== location.origin) throw new Error('链接地址与当前电脑不同，请直接打开粘贴的完整链接。');
       if (!nextToken || !/^[A-Za-z0-9_-]{32,128}$/.test(nextToken)) throw new Error('请输入电脑工具“复制链接”得到的完整地址。');
+      pairingGeneration++;
       token = nextToken;
       rememberToken(token);
       history.replaceState(null, '', location.pathname + '#token=' + encodeURIComponent(token));
