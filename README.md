@@ -29,13 +29,18 @@ OBS Monitor 是一款 Windows 桌面工具。手机通过局域网网页连接�
 
 ## 下载
 
-当前版本：**2.2.2**。下载 **[Windows x64 单文件 EXE](https://github.com/ElmaTony/obs-monitor/releases/download/v2.2.2/obs-monitor-2.2.2-windows-x64.exe)** 后直接运行，无需安装 Python。
+当前版本：**2.2.2**。所有程序包均包含运行环境，无需安装 Python。
 
-[SHA-256 校验清单](https://github.com/ElmaTony/obs-monitor/releases/download/v2.2.2/SHA256SUMS.txt) · [当前版本源码](https://github.com/ElmaTony/obs-monitor/tree/v2.2.2) · [历史发行版本](https://github.com/ElmaTony/obs-monitor/releases)
+| 平台 | 安装版 | 便携版 | 单文件 EXE |
+| --- | --- | --- | --- |
+| Windows x64 | [下载](https://github.com/ElmaTony/obs-monitor/releases/download/v2.2.2/obs-monitor-2.2.2-windows-x64-setup.exe) | [下载](https://github.com/ElmaTony/obs-monitor/releases/download/v2.2.2/obs-monitor-2.2.2-windows-x64-portable.zip) | [下载](https://github.com/ElmaTony/obs-monitor/releases/download/v2.2.2/obs-monitor-2.2.2-windows-x64.exe) |
+| Windows ARM64 | [下载](https://github.com/ElmaTony/obs-monitor/releases/download/v2.2.2/obs-monitor-2.2.2-windows-arm64-setup.exe) | [下载](https://github.com/ElmaTony/obs-monitor/releases/download/v2.2.2/obs-monitor-2.2.2-windows-arm64-portable.zip) | [下载](https://github.com/ElmaTony/obs-monitor/releases/download/v2.2.2/obs-monitor-2.2.2-windows-arm64.exe) |
 
-运行要求：Windows 10 / 11 x64，需要另外安装支持 **WebSocket v5** 的 OBS Studio。
+Intel / AMD 电脑选择 x64；Windows ARM 设备选择 ARM64。安装版提供快捷方式与卸载入口，便携版解压后运行，单文件 EXE 可直接运行。
 
-本版发布 **x64 单文件程序**和 `SHA256SUMS.txt` 校验清单。GitHub 自动提供的 **Source code (zip / tar.gz)** 用于查看源码或按[开发说明](#开发)运行；源码仓库中不包含打包好的 EXE。Windows ARM64 的验证范围是源码自动测试，本版不附带 ARM64 程序。
+[完整发行源码](https://github.com/ElmaTony/obs-monitor/releases/download/v2.2.2/obs-monitor-2.2.2-source.zip) · [SHA-256 校验清单](https://github.com/ElmaTony/obs-monitor/releases/download/v2.2.2/SHA256SUMS.txt) · [历史发行版本](https://github.com/ElmaTony/obs-monitor/releases)
+
+运行要求：Windows 10 / 11 x64，或 Windows 11 ARM64，以及支持 **WebSocket v5** 的 OBS Studio。源码包用于查看源码、开发和构建，操作步骤见[开发说明](#开发)。
 
 ## 快速开始
 
@@ -108,7 +113,7 @@ OBS Monitor 是一款 Windows 桌面工具。手机通过局域网网页连接�
 
 ### 如何升级？
 
-退出 OBS Monitor，下载新版 EXE，替换原程序后重新运行。同一 Windows 用户的设置和手机配对会保留，OBS 中正在进行的录制会继续。电脑 IP 或手机网页端口变化时，请使用工具显示的新链接。
+升级前退出 OBS Monitor：安装版运行新版安装程序，便携版解压到新目录，单文件版替换原 EXE。同一 Windows 用户的设置和手机配对会保留，OBS 中正在进行的录制会继续。电脑 IP 或手机网页端口变化时，请使用工具显示的新链接。
 
 ### 设置和密码保存在哪里？
 
@@ -138,7 +143,9 @@ node test_mobile_races.cjs
 node test_mobile_pairing.cjs
 ```
 
-测试覆盖录制控制、原始字节、声音、设置、持久配对、连接恢复和乱序响应。v2.2.2 已通过 Windows x64 与 ARM64 的[源码自动测试](https://github.com/ElmaTony/obs-monitor/actions/runs/42009205159)，以及 x64 EXE 对模拟 OBS 的联调。手机脚本测试使用模拟浏览器环境；实际手机网络、防火墙和扬声器仍需在使用环境确认。
+测试覆盖录制控制、原始字节、声音、设置、持久配对、连接恢复和乱序响应。v2.2.2 已通过 Windows x64 与 ARM64 的[源码自动测试](https://github.com/ElmaTony/obs-monitor/actions/runs/42009205159)，以及两种架构发行程序对模拟 OBS 的[联调和安装卸载检查](https://github.com/ElmaTony/obs-monitor/actions/runs/42206526117)。手机脚本测试使用模拟浏览器环境；实际手机网络、防火墙和扬声器仍需在使用环境确认。
+
+完整发行源码包包含构建脚本和 `BUILDING.md`，可在对应架构的 Windows 环境中构建。
 
 贡献约定见 [CONTRIBUTING.md](CONTRIBUTING.md)，安全说明见 [SECURITY.md](SECURITY.md)。
 
