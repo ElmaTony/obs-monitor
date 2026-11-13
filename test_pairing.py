@@ -3,6 +3,7 @@ import unittest
 import urllib.error
 import urllib.request
 import uuid
+import threading
 from http.cookiejar import CookieJar
 from unittest.mock import MagicMock, patch
 
@@ -13,6 +14,38 @@ from remote_server import RemoteServer, PAIRING_COOKIE
 
 
 class PairingIdentityTests(unittest.TestCase):
+    def test_revoked_token_cannot_enter_a_mutation(self):
+        from pairing import PairingRevokedError
+        identity = PairingIdentity()
+        old = identity.token
+        identity.rotate()
+        operation = MagicMock()
+        with self.assertRaises(PairingRevokedError):
+            identity.run_if_current(old, operation)
+        operation.assert_not_called()
+
+    def test_rotation_waits_for_an_already_authorized_mutation(self):
+        identity = PairingIdentity()
+        token = identity.token
+        entered, release, rotating, rotated = (threading.Event() for _ in range(4))
+        def operation():
+            entered.set()
+            release.wait(2)
+        def rotation():
+            rotating.set(); identity.rotate(); rotated.set()
+        worker = threading.Thread(target=lambda: identity.run_if_current(token, operation))
+        rotate = threading.Thread(target=rotation)
+        worker.start()
+        try:
+            self.assertTrue(entered.wait(1))
+            rotate.start()
+            self.assertTrue(rotating.wait(1))
+            self.assertFalse(rotated.wait(0.05))
+        finally:
+            release.set(); worker.join(2)
+            if rotate.ident is not None:rotate.join(2)
+        self.assertTrue(rotated.is_set())
+
     def test_saved_identity_survives_desktop_restart(self):
         store = MagicMock()
         store.read.return_value = "A" * 43
@@ -49,6 +82,30 @@ class PairingIdentityTests(unittest.TestCase):
 
 
 class PersistentBrowserPairingTests(unittest.TestCase):
+    def test_reset_between_body_validation_and_dispatch_rejects_the_mutation(self):
+        original = self.server.dispatch
+        def reset_before_dispatch(token, operation):
+            self.server.reset_pairing()
+            return original(token, operation)
+        with patch.object(self.server, 'dispatch', side_effect=reset_before_dispatch), \
+             patch.object(self.controller, 'set_sound_enabled') as change:
+            with self.assertRaises(urllib.error.HTTPError) as error:
+                self.request('/api/sound', token=True, data={'enabled': False})
+            self.assertEqual(error.exception.code, 401)
+            change.assert_not_called()
+
+    def test_stop_between_body_validation_and_dispatch_rejects_the_mutation(self):
+        original = self.server.dispatch
+        def stop_before_dispatch(token, operation):
+            self.server.stop()
+            return original(token, operation)
+        with patch.object(self.server, 'dispatch', side_effect=stop_before_dispatch), \
+             patch.object(self.controller, 'set_sound_enabled') as change:
+            with self.assertRaises(urllib.error.HTTPError) as error:
+                self.request('/api/sound', token=True, data={'enabled': False})
+            self.assertEqual(error.exception.code, 503)
+            change.assert_not_called()
+
     def test_stopping_remote_while_reading_body_prevents_late_mutation(self):
         handler_type = self.server.server.RequestHandlerClass
         authenticate = handler_type.authenticated

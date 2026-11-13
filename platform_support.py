@@ -7,6 +7,7 @@ import os
 from functools import lru_cache
 from pathlib import Path
 import struct
+import tempfile
 import wave
 import winsound
 
@@ -181,8 +182,20 @@ class AudioPlayer:
         SOUND_DIR.mkdir(parents=True, exist_ok=True)
         for name, recipe in self.SOUND_RECIPES.items():
             path = SOUND_DIR / f"{name}.wav"
-            if not path.is_file():
+            if not self._valid_tone(path):
                 self._write_tone(path, recipe)
+
+    @staticmethod
+    def _valid_tone(path):
+        try:
+            with wave.open(str(path), "rb") as tone:
+                frames = tone.getnframes()
+                if frames <= 0:
+                    return False
+                tone.setpos(frames - 1)
+                return len(tone.readframes(1)) == tone.getnchannels() * tone.getsampwidth()
+        except (OSError, EOFError, wave.Error):
+            return False
 
     @staticmethod
     def _write_tone(path: Path, recipe: list[tuple[float, float]]) -> None:
@@ -206,11 +219,18 @@ class AudioPlayer:
                 integer = max(-32767, min(32767, int(value * 32767)))
                 samples.extend(struct.pack("<h", integer))
 
-        with wave.open(str(path), "wb") as output:
-            output.setnchannels(1)
-            output.setsampwidth(2)
-            output.setframerate(sample_rate)
-            output.writeframes(samples)
+        handle, filename = tempfile.mkstemp(prefix=f".{path.stem}-", suffix=".tmp", dir=path.parent)
+        os.close(handle)
+        temporary = Path(filename)
+        try:
+            with wave.open(str(temporary), "wb") as output:
+                output.setnchannels(1)
+                output.setsampwidth(2)
+                output.setframerate(sample_rate)
+                output.writeframes(samples)
+            temporary.replace(path)
+        finally:
+            temporary.unlink(missing_ok=True)
 
     def play(self, name: str) -> None:
         path = SOUND_DIR / f"{name}.wav"

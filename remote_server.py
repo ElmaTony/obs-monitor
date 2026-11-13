@@ -5,25 +5,32 @@ import ipaddress
 import json
 import socket
 import threading
+import time
 from concurrent.futures import TimeoutError as FutureTimeout
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from http.cookies import CookieError, SimpleCookie
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from pairing import PairingIdentity
+from pairing import PairingIdentity, PairingRevokedError
 from version import VERSION
 
 PAIRING_COOKIE = "obs_monitor_pairing"
 PAIRING_MAX_AGE = 365 * 24 * 60 * 60
 
 
+class RemoteStoppedError(RuntimeError):
+    pass
+
+
 def lan_addresses():
     addresses = []
+    preferred = None
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
             probe.connect(("192.0.2.1", 80))
-            addresses.append(probe.getsockname()[0])
+            preferred = probe.getsockname()[0]
+            addresses.append(preferred)
     except OSError:
         pass
     try:
@@ -34,7 +41,7 @@ def lan_addresses():
     # VPN benchmark addresses (198.18/15) are not reachable from a phone's Wi-Fi.
     benchmark = ipaddress.ip_network("198.18.0.0/15")
     addresses = [ip for ip in addresses if ipaddress.ip_address(ip) not in benchmark]
-    return sorted(addresses, key=lambda ip: 0 if ip.startswith("192.168.") else 1 if ip.startswith("10.") else 2)
+    return sorted(addresses, key=lambda ip: (ip != preferred, 0 if ip.startswith("192.168.") else 1 if ip.startswith("10.") else 2))
 
 
 class RemoteServer:
@@ -44,6 +51,7 @@ class RemoteServer:
         self.server = None
         self.thread = None
         self._accepting = threading.Event()
+        self._dispatch_lock = threading.RLock()
 
     @property
     def token(self):
@@ -51,6 +59,12 @@ class RemoteServer:
 
     def reset_pairing(self):
         return self.identity.rotate()
+
+    def dispatch(self, token, operation):
+        with self._dispatch_lock:
+            if not self._accepting.is_set():
+                raise RemoteStoppedError("手机遥控已关闭，操作未执行")
+            return self.identity.run_if_current(token, operation)
 
     def url(self, address=None):
         address = address or next(iter(lan_addresses()), "127.0.0.1")
@@ -137,11 +151,17 @@ class RemoteServer:
                     length = int(self.headers.get("Content-Length", "0"))
                     if not 0 < length <= 4096:
                         raise ValueError("请求长度无效")
-                    data = json.loads(self.rfile.read(length))
+                    body = self.rfile.read(length)
+                    if len(body) != length:
+                        raise ValueError("请求内容不完整")
+                    data = json.loads(body)
                     if not isinstance(data, dict):
                         raise ValueError("请求格式无效")
                 except (ValueError, TypeError):
                     self.send_payload(400, {"ok": False, "message": "请求格式无效"})
+                    return
+                except OSError:
+                    self.send_payload(408, {"ok": False, "message": "接收请求超时或连接已断开，操作未执行"})
                     return
                 # Reading a slow request body can overlap a desktop pairing reset.
                 # Do not let an already revoked credential change recording/settings.
@@ -156,28 +176,59 @@ class RemoteServer:
                     if data.get("action") not in ("start", "stop", "pause", "resume"):
                         self.send_payload(400, {"ok": False, "message": "操作无效"})
                         return
-                    future = owner.controller.submit(data["action"])
-                    try:
-                        self.send_payload(200, future.result(timeout=owner.controller.control_timeout))
-                    except FutureTimeout:
-                        cancelled = future.cancel()
-                        message = "操作已取消，请稍后重试" if cancelled else "操作结果尚未确认，请查看 OBS 当前状态后再操作"
-                        self.send_payload(504, {"ok": False, "message": message})
-                    except Exception as exc:
-                        self.send_payload(409, {"ok": False, "message": str(exc)})
+                    accepted, future = self.dispatch_operation(lambda: owner.controller.submit(data["action"]))
+                    if not accepted:
+                        return
+                    started = time.monotonic()
+                    while True:
+                        try:
+                            remaining = owner.controller.control_timeout - (time.monotonic() - started)
+                            result = future.result(timeout=max(0, min(0.25, remaining)))
+                        except FutureTimeout as exc:
+                            if future.done():
+                                self.send_payload(409, {"ok": False, "message": str(exc)})
+                                break
+                            # The controller refreshes the frame rate after dispatch.
+                            # Extend the wait if that changes its confirmation budget.
+                            if time.monotonic() - started < owner.controller.control_timeout:
+                                continue
+                            cancelled = future.cancel()
+                            message = "操作已取消，请稍后重试" if cancelled else "操作结果尚未确认，请查看 OBS 当前状态后再操作"
+                            self.send_payload(504, {"ok": False, "message": message})
+                            break
+                        except Exception as exc:
+                            self.send_payload(409, {"ok": False, "message": str(exc)})
+                            break
+                        else:
+                            self.send_payload(200, result)
+                            break
                 elif path == "/api/sound":
                     if not isinstance(data.get("enabled"), bool):
                         self.send_payload(400, {"ok": False, "message": "提示音开关格式无效"})
                         return
                     try:
-                        owner.controller.set_sound_enabled(data["enabled"])
+                        accepted, _ = self.dispatch_operation(lambda: owner.controller.set_sound_enabled(data["enabled"]))
+                        if not accepted:
+                            return
                         self.send_payload(200, {"ok": True, "state": owner.controller.snapshot()})
                     except OSError:
                         self.send_payload(500, {"ok": False, "message": "提示音设置保存失败，请在电脑检查"})
                 elif path == "/api/unpair":
+                    accepted, _ = self.dispatch_operation(lambda: None)
+                    if not accepted:
+                        return
                     self.send_payload(200, {"ok": True}, forget=True)
                 else:
                     self.send_payload(404, {"ok": False, "message": "接口不存在"})
+
+            def dispatch_operation(self, operation):
+                try:
+                    return True, owner.dispatch(self._pairing_token, operation)
+                except PairingRevokedError as exc:
+                    self.send_payload(401, {"ok": False, "message": str(exc)})
+                except RemoteStoppedError as exc:
+                    self.send_payload(503, {"ok": False, "message": str(exc)})
+                return False, None
 
         self.server = ThreadingHTTPServer((self.host, self.port), Handler)
         self.server.daemon_threads = True
@@ -187,7 +238,8 @@ class RemoteServer:
         self.thread.start()
 
     def stop(self):
-        self._accepting.clear()
+        with self._dispatch_lock:
+            self._accepting.clear()
         if self.server:
             self.server.shutdown()
             self.server.server_close()

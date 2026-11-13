@@ -3,10 +3,15 @@ from __future__ import annotations
 
 import re
 import hashlib
+import hmac
 import secrets
 import threading
 
 from platform_support import APP_DIR, WindowsCredentialStore
+
+
+class PairingRevokedError(RuntimeError):
+    pass
 
 
 class PairingIdentity:
@@ -41,3 +46,11 @@ class PairingIdentity:
                 self._store.write(replacement)
             self._token = replacement
         return replacement
+
+    def run_if_current(self, token, operation):
+        # Validation and accepting the operation share the rotation lock. A reset
+        # cannot finish in the gap between the final check and the mutation.
+        with self._lock:
+            if not hmac.compare_digest(token, self._token):
+                raise PairingRevokedError("配对已重置，请使用电脑中的新链接重新连接")
+            return operation()

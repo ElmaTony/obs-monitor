@@ -44,19 +44,18 @@ function harness(storageBlocked = false, options = {}) {
     fetch:(url,options)=>new Promise((resolve,reject)=>requests.push({url,options,resolve,reject,done:false}))});
   try {vm.runInContext(script,context);} catch(error){errors.push(error);}
   async function advance(ms) {
-    wall += ms;
     const end = clock+ms;
     for (let i=0;i<2000;i++) {
       const found=[...timers].filter(([,t])=>t.at<=end).sort((a,b)=>a[1].at-b[1].at)[0];
       if(!found) break;
-      const [id,t]=found;clock=t.at;timers.delete(id);
+      const [id,t]=found;wall+=t.at-clock;clock=t.at;timers.delete(id);
       if(t.interval) timers.set(id,{...t,at:clock+t.interval});
       try {const result=t.fn();if(result?.catch) result.catch(e=>errors.push(e));} catch(e){errors.push(e);}
       await flush();
     }
-    clock=end;await flush();
+    wall+=end-clock;clock=end;await flush();
   }
-  function pending(url) {return requests.find(r=>!r.done && r.url===url);}
+  function pending(url) {return requests.find(r=>!r.done && !r.options.signal.aborted && r.url===url);}
   async function respond(request,value,status=200) {
     assert.ok(request,'Expected an outstanding request');request.done=true;
     request.resolve({ok:status>=200&&status<300,status,json:async()=>value});await flush();
@@ -177,7 +176,7 @@ async function failedSoundSaveRestoresServerState() {
 
 async function timedOutPollRecoversAndMatchesVisualAvailability() {
   const h=harness();await h.initial();await h.advance(5000);
-  const request=h.pending('/api/status');request.done=true;
+  const request=h.requests.find(r=>!r.done && r.url==='/api/status');request.done=true;
   request.reject(Object.assign(Error('timeout'),{name:'AbortError'}));await flush();
   assert.equal(h.button('pause').disabled,true);
   assert.ok(h.ids.notice.textContent.includes('连接超时'));
@@ -201,6 +200,32 @@ async function slowControlUsesTheDesktopConfirmationBudget() {
   assert.equal(h.requests.filter(r=>r.url==='/api/control').length, 1);
 }
 
+async function pendingControlKeepsRecordingMetricsLive() {
+  const h=harness();await h.initial();
+  const click=h.button('pause').listeners.click();
+  const command=h.pending('/api/control');
+  await h.respond(h.pending('/api/status'),state(2,false,{busy:true,bytes:2097152,size_text:'2.00 MB',size_exact_text:'2,097,152 字节'}));
+  assert.equal(h.ids.size.textContent,'2.00 MB');
+  assert.ok(h.buttons.every(b=>b.disabled),'Pending control still blocks duplicate actions');
+  await h.respond(command,{ok:true,message:'Paused',state:state(3,true)});await click;
+  assert.equal(h.button('resume').disabled,false);
+}
+
+async function controlTimeoutAdaptsToRefreshedConfirmationBudget() {
+  const h=harness();
+  await h.respond(h.pending('/api/status'),state(1,false,{control_timeout_ms:10000}));
+  const click=h.button('pause').listeners.click();
+  const command=h.pending('/api/control');
+  await h.respond(h.pending('/api/status'),state(2,false,{busy:true,control_timeout_ms:40000}));
+  await h.advance(800);
+  const poll=h.pending('/api/status');poll.done=true;poll.reject(Error('temporary Wi-Fi loss'));await flush();
+  await h.advance(15000);
+  assert.equal(command.options.signal.aborted,false,'A refreshed frame-rate budget extends this in-flight request');
+  await h.respond(command,{ok:true,message:'Paused',state:state(3,true)});await click;
+  assert.equal(h.button('resume').disabled,false);
+  assert.equal(h.requests.filter(r=>r.url==='/api/control').length,1);
+}
+
 module.exports = {harness, state, flush};
 if (require.main === module) (async()=>{
   let failed=0;
@@ -208,7 +233,8 @@ if (require.main === module) (async()=>{
     repeatedPauseResumeWithReorderedResponses,blockedStorageStillLoadsAndControls,staleWhileBackgroundedAndPageResume,
     rejectedControlRefreshesStateWithoutRetry,unknownControlResultReconcilesWithoutReplay,newerPollWinsOverLateControlResponse,
     duplicateTapDoesNotSendDuplicateCommand,failedSoundSaveRestoresServerState,timedOutPollRecoversAndMatchesVisualAvailability,
-    slowControlUsesTheDesktopConfirmationBudget]) {
+    slowControlUsesTheDesktopConfirmationBudget,pendingControlKeepsRecordingMetricsLive,
+    controlTimeoutAdaptsToRefreshedConfirmationBudget]) {
     try {await test();console.log('PASS',test.name);} catch(error){failed++;console.error('FAIL',test.name,error.message);}
   }
   if(failed) process.exitCode=1;

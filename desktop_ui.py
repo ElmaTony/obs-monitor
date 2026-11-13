@@ -346,6 +346,10 @@ class MonitorApp(QMainWindow):
     def apply_theme(self, theme, save=True):
         if theme not in PALETTES:
             return
+        if getattr(self, "palette_values", None) is PALETTES[theme] and self.config.theme == theme:
+            for name, button in self.theme_buttons.items():
+                button.setChecked(name == theme)
+            return
         if save:
             try:
                 self.controller.set_theme(theme)
@@ -667,6 +671,12 @@ QToolTip {{background:{p['surface']};color:{p['text']};border:1px solid {p['line
         if self.settings_window and self.settings_window.isVisible():
             self.settings_window.raise_(); return
         dialog = self.settings_window = QDialog(self); dialog.setWindowTitle("连接与提醒设置"); dialog.resize(470, 540)
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        def closed():
+            self._finish_theme_transition()
+            if self.settings_window is dialog:
+                self.settings_window = None
+        dialog.finished.connect(closed)
         layout = QVBoxLayout(dialog); layout.setContentsMargins(28, 26, 28, 24); layout.setSpacing(18)
         layout.addWidget(text("连接与提醒", "title"))
         hint = text("在 OBS「工具 → WebSocket 服务器设置」中启用服务器。", "muted"); hint.setWordWrap(True); layout.addWidget(hint)
@@ -724,7 +734,7 @@ QToolTip {{background:{p['surface']};color:{p['text']};border:1px solid {p['line
         dialog = self.help_window = QMessageBox(self)
         dialog.setWindowTitle("使用说明")
         dialog.setIcon(QMessageBox.Icon.Information)
-        dialog.setText("1. 打开 OBS，启用「工具 → WebSocket 服务器设置」。\n\n2. 在本软件「设置」中填写相同的端口和密码。\n\n3. 使用桌面或手机控制录制。声音由电脑播放，可分别关闭。\n\n4. 手机与电脑连接同一 Wi-Fi 后扫码；多网卡时可切换 IP。被防火墙拦截时，请允许本软件通过专用网络。\n\n5. 暂停需要 OBS 使用支持暂停的录制编码器。\n\n关闭本软件会停止手机网页，不会结束 OBS 的录制。")
+        dialog.setText("1. 打开 OBS，启用「工具 → WebSocket 服务器设置」。\n\n2. 在本软件「设置」中填写相同的端口和密码。\n\n3. 使用桌面或手机控制录制。声音由电脑播放，可分别关闭。\n\n4. 手机与电脑连接同一局域网后扫码；多网卡时可切换 IP。被防火墙拦截时，请允许本软件通过专用网络。\n\n5. 暂停需要 OBS 使用支持暂停的录制编码器。\n\n关闭本软件会停止手机网页，不会结束 OBS 的录制。")
         dialog.setStandardButtons(QMessageBox.StandardButton.Ok)
         dialog.button(QMessageBox.StandardButton.Ok).setText("知道了")
         dialog.open()
@@ -734,6 +744,8 @@ QToolTip {{background:{p['surface']};color:{p['text']};border:1px solid {p['line
             QApplication.instance().removeEventFilter(self)
             self._finish_theme_transition()
             self.closed = True; self.timer.stop()
+            for dialog in self.findChildren(QDialog):
+                dialog.close()
             if self.remote:
                 self.remote.stop()
             self.controller.stop()

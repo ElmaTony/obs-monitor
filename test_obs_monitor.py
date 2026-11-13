@@ -482,6 +482,13 @@ class ControllerTests(unittest.TestCase):
 
 
 class SettingsTests(unittest.TestCase):
+    def test_default_route_is_preferred_over_virtual_adapter_addresses(self):
+        from remote_server import lan_addresses
+        with patch('remote_server.socket.socket') as sock, \
+             patch('remote_server.socket.gethostbyname_ex', return_value=('pc', [], ['192.168.56.1', '10.0.0.20'])):
+            sock.return_value.__enter__.return_value.getsockname.return_value = ('10.0.0.20', 12345)
+            self.assertEqual(lan_addresses()[0], '10.0.0.20')
+
     def test_first_run_help_flag_is_persisted_and_legacy_config_defaults_to_unseen(self):
         with tempfile.TemporaryDirectory() as tmp, patch.object(settings, 'CONFIG_PATH', Path(tmp)/'config.json'), \
              patch.object(settings, 'detect_obs_websocket_settings', return_value=('127.0.0.1',4455,'')), \
@@ -559,6 +566,45 @@ class SettingsTests(unittest.TestCase):
 
 
 class DesktopTests(unittest.TestCase):
+    def test_reselecting_current_theme_keeps_transition_and_avoids_another_save(self):
+        self.app.show(); self.qt.processEvents()
+        with patch('desktop_ui.animations_enabled', return_value=True), patch.object(self.config, 'save') as save:
+            self.app.apply_theme('dark')
+            animation = self.app._theme_animation
+            self.app.theme_buttons['dark'].click()
+            self.assertIs(self.app._theme_animation, animation)
+            self.assertTrue(self.app.theme_buttons['dark'].isChecked())
+            self.assertEqual(save.call_count, 1)
+
+    def test_main_window_close_also_closes_owned_dialogs(self):
+        from PySide6.QtWidgets import QDialog
+        self.app.show(); self.app.open_settings(); self.app.show_help()
+        self.qt.processEvents()
+        self.app.close(); self.qt.processEvents()
+        self.assertTrue(self.app.closed)
+        self.assertFalse(any(dialog.isVisible() for dialog in self.app.findChildren(QDialog)))
+
+    def test_closing_settings_during_theme_transition_releases_layers(self):
+        self.app.show(); self.app.open_settings(); self.qt.processEvents()
+        with patch('desktop_ui.animations_enabled', return_value=True), patch.object(self.config, 'save'):
+            self.app.apply_theme('dark')
+        self.app.settings_window.reject(); self.qt.processEvents()
+        self.assertIsNone(self.app.settings_window)
+        self.assertIsNone(self.app._theme_animation)
+        self.assertEqual(self.app._theme_overlays, [])
+
+    def test_closed_settings_dialogs_are_released(self):
+        from PySide6.QtCore import QCoreApplication, QEvent
+        from PySide6.QtWidgets import QDialog
+        self.app.show(); self.qt.processEvents()
+        for _ in range(8):
+            self.app.open_settings()
+            self.app.settings_window.reject()
+            self.qt.processEvents()
+            QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        self.assertIsNone(self.app.settings_window)
+        self.assertEqual(self.app.findChildren(QDialog), [])
+
     def test_first_run_help_opens_once_keeps_refreshing_and_can_be_opened_manually(self):
         self.app.show(); self.qt.processEvents()
         with patch.object(self.config, 'save') as save:
@@ -842,6 +888,29 @@ class DesktopTests(unittest.TestCase):
 
 
 class AudioTests(unittest.TestCase):
+    def test_damaged_cached_tone_is_regenerated(self):
+        import wave
+        from platform_support import AudioPlayer
+        with tempfile.TemporaryDirectory() as temporary, patch('platform_support.SOUND_DIR', Path(temporary)):
+            path = Path(temporary)/'start.wav'
+            path.write_bytes(b'incomplete wave')
+            AudioPlayer()
+            with wave.open(str(path), 'rb') as tone:
+                self.assertGreater(tone.getnframes(), 0)
+
+    def test_failed_tone_generation_preserves_the_previous_file(self):
+        import wave
+        from platform_support import AudioPlayer
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary)/'start.wav'
+            AudioPlayer._write_tone(path, AudioPlayer.SOUND_RECIPES['start'])
+            before = path.read_bytes()
+            with patch.object(wave.Wave_write, 'writeframes', side_effect=OSError('disk full')):
+                with self.assertRaises(OSError):
+                    AudioPlayer._write_tone(path, AudioPlayer.SOUND_RECIPES['start'])
+            self.assertEqual(path.read_bytes(), before)
+            self.assertEqual([p.name for p in Path(temporary).iterdir()], ['start.wav'])
+
     def test_all_four_operation_tones_are_distinct_valid_pcm(self):
         import hashlib
         import wave
@@ -862,6 +931,35 @@ class AudioTests(unittest.TestCase):
 
 
 class RemoteTests(unittest.TestCase):
+    def test_incomplete_post_body_cannot_control_recording(self):
+        import socket
+        body = b'{"action":"start"}'
+        with socket.create_connection(('127.0.0.1', self.server.port), timeout=2) as client:
+            headers = (f'POST /api/control HTTP/1.1\r\nHost: localhost\r\nX-OBS-Token: {self.server.token}\r\n'
+                       f'Content-Length: {len(body)+10}\r\n\r\n').encode('ascii')
+            client.sendall(headers + body)
+            client.shutdown(socket.SHUT_WR)
+            self.assertIn(b'400', client.recv(4096).split(b'\r\n')[0])
+        self.assertEqual(self.fake.requests, [])
+
+    def test_confirmation_timeout_tracks_a_changed_frame_rate_budget(self):
+        from unittest.mock import PropertyMock
+        future = Future()
+        future.set_running_or_notify_cancel()
+        calls = []
+        def budget():
+            calls.append(True)
+            return 0.03 if len(calls) == 1 else 0.5
+        timer = threading.Timer(0.12, lambda: future.set_result({'ok':True,'state':self.controller.snapshot()}))
+        timer.start()
+        try:
+            with patch.object(type(self.controller), 'control_timeout', new_callable=PropertyMock, side_effect=budget), \
+                 patch.object(self.controller, 'submit', return_value=future):
+                with self.request('/api/control', {'action':'start'}) as response:
+                    self.assertTrue(json.load(response)['ok'])
+        finally:
+            timer.join()
+
     def test_cancelled_phone_connection_does_not_raise_handler_error(self):
         from http.client import RemoteDisconnected
         from http.server import BaseHTTPRequestHandler

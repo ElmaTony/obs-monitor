@@ -106,12 +106,22 @@
   let pendingControl = false, soundBusy = false, pairingBusy = false, stopped = false, toastTimer;
   let pollTimer, statusFlight = null, statusGeneration = 0, pollFailures = 0;
   let pairingGeneration = 0;
+  let latestControlBudget = 10000;
 
   async function api(path, body, suppliedController) {
     const generation = pairingGeneration;
     const controller = suppliedController || new AbortController();
-    const controlTimeout = Number.isFinite(current?.control_timeout_ms) ? Math.max(10000, current.control_timeout_ms + 3000) : 10000;
-    const timeout = setTimeout(() => controller.abort(), body === undefined ? 4000 : path === '/api/control' ? Math.min(2147483647, controlTimeout) : 10000);
+    const startedAt = now(), startedWall = Date.now();
+    const initialControlBudget = latestControlBudget;
+    let timeout;
+    function armControlTimeout() {
+      const budget = Math.max(initialControlBudget, latestControlBudget);
+      const elapsed = Math.max(0, now() - startedAt, Date.now() - startedWall);
+      if (elapsed >= budget) controller.abort();
+      else timeout = setTimeout(armControlTimeout, Math.min(2147483647, budget - elapsed));
+    }
+    if (body !== undefined && path === '/api/control') armControlTimeout();
+    else timeout = setTimeout(() => controller.abort(), body === undefined ? 4000 : 10000);
     try {
       const response = await fetch(path, {
         method: body === undefined ? 'GET' : 'POST',
@@ -192,6 +202,7 @@
     }
     if (state.revision < acceptedRevision) return false;
     acceptedRevision = state.revision;
+    latestControlBudget = Number.isFinite(state.control_timeout_ms) ? Math.max(10000, state.control_timeout_ms + 3000) : 10000;
     current = state;
     receivedAt = now();
     receivedWallAt = Date.now();
@@ -265,6 +276,8 @@
     pendingControl = true;
     cancelStatus();
     enableButtons();
+    // Keep the size, state and updated confirmation budget live while waiting.
+    void poll();
     try {
       const result = await api('/api/control', {action});
       render(result.state);
