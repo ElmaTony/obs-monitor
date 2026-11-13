@@ -566,6 +566,63 @@ class SettingsTests(unittest.TestCase):
 
 
 class DesktopTests(unittest.TestCase):
+    def _fake_phone_service(self):
+        self.app.remote = MagicMock()
+        self.app.remote.url.side_effect = lambda address: f'http://{address}:8765/#token=test'
+
+    def test_network_discovery_runs_off_the_gui_thread(self):
+        self._fake_phone_service()
+        observed = []
+        ui_thread = threading.get_ident()
+        def discover():
+            observed.append(threading.get_ident())
+            return ['192.0.2.10']
+        with patch('desktop_ui.lan_addresses', side_effect=discover):
+            self.app._sync_remote_ui()
+            deadline = time.monotonic()+2
+            while self.app._address_probe_running and time.monotonic()<deadline:
+                self.qt.processEvents(); time.sleep(0.005)
+        self.assertEqual(len(observed), 1)
+        self.assertNotEqual(observed[0], ui_thread)
+        self.assertEqual(self.app.address_combo.currentData(), '192.0.2.10')
+        self.assertTrue(self.app.copy_button.isEnabled())
+
+    def test_network_change_refreshes_link_and_preserves_a_valid_manual_selection(self):
+        self._fake_phone_service()
+        self.app._on_addresses_ready(['192.0.2.10','192.0.2.20'])
+        self.app.address_combo.setCurrentIndex(1)
+        self.app.address_combo.activated.emit(1)
+        self.app._on_addresses_ready(['192.0.2.30','192.0.2.20'])
+        self.assertEqual(self.app.address_combo.currentData(), '192.0.2.20')
+        self.app._on_addresses_ready(['192.0.2.30'])
+        self.app.copy_link()
+        self.assertIn('192.0.2.30', self.qt.clipboard().text())
+
+    def test_changed_default_route_updates_the_automatic_qr_address(self):
+        self._fake_phone_service()
+        self.app._on_addresses_ready(['192.0.2.10','192.0.2.20'])
+        self.assertEqual(self.app.address_combo.currentData(), '192.0.2.10')
+        self.app._on_addresses_ready(['192.0.2.20','192.0.2.10'])
+        self.assertEqual(self.app.address_combo.currentData(), '192.0.2.20')
+
+    def test_no_network_does_not_offer_a_loopback_phone_link(self):
+        self._fake_phone_service()
+        self.app._sync_remote_ui(discover=False)
+        self.assertFalse(self.app.copy_button.isEnabled())
+        self.assertTrue(self.app.open_button.isEnabled())
+        self.app._on_addresses_ready(['192.0.2.10'])
+        self.assertTrue(self.app.copy_button.isEnabled())
+        self.app._on_addresses_ready([])
+        self.assertFalse(self.app.copy_button.isEnabled())
+        self.assertIsNone(self.app.address_combo.currentData())
+
+    def test_late_network_discovery_cannot_update_a_closed_window(self):
+        self.app.close()
+        with patch.object(self.app, '_sync_remote_ui') as update:
+            self.app._on_addresses_ready(['192.0.2.10'])
+        update.assert_not_called()
+        self.assertFalse(self.app.network_timer.isActive())
+
     def test_reselecting_current_theme_keeps_transition_and_avoids_another_save(self):
         self.app.show(); self.qt.processEvents()
         with patch('desktop_ui.animations_enabled', return_value=True), patch.object(self.config, 'save') as save:

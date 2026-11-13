@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import queue
 import sys
+import threading
 import webbrowser
 from datetime import datetime
 
 import qrcode
-from PySide6.QtCore import Qt, QTimer, QSize, QRectF, QEvent, QVariantAnimation, QEasingCurve
+from PySide6.QtCore import Qt, QTimer, QSize, QRectF, QEvent, QVariantAnimation, QEasingCurve, Signal
 from PySide6.QtGui import QColor, QFont, QIcon, QImage, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
     QFormLayout, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow,
@@ -212,6 +213,8 @@ class ThemeOverlay(QWidget):
 
 
 class MonitorApp(QMainWindow):
+    addresses_ready = Signal(object)
+
     def __init__(self, config=None, controller=None, start_services=True, player=None):
         super().__init__()
         self.config = config or AppConfig.load()
@@ -229,6 +232,10 @@ class MonitorApp(QMainWindow):
         self.closed = self._busy = False
         self.settings_window = None
         self.help_window = None
+        self._known_addresses = []
+        self._address_probe_running = False
+        self._address_manually_selected = False
+        self.addresses_ready.connect(self._on_addresses_ready)
         self._theme_animation = None
         self._theme_overlays = []
         self._title_colors = None
@@ -242,6 +249,9 @@ class MonitorApp(QMainWindow):
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._tick)
         self.timer.start(120)
+        self.network_timer = QTimer(self)
+        self.network_timer.timeout.connect(self._request_address_refresh)
+        self.network_timer.start(5000)
         if start_services:
             self.controller.start()
             self._start_remote()
@@ -319,6 +329,7 @@ class MonitorApp(QMainWindow):
         self.qr_label.setWordWrap(True); layout.addWidget(self.qr_label)
         hint = text("同一网络 · 扫码连接", "small"); hint.setAlignment(Qt.AlignmentFlag.AlignCenter); layout.addWidget(hint)
         self.address_combo = QComboBox(); self.address_combo.setMinimumHeight(28)
+        self.address_combo.activated.connect(self._select_network_address)
         self.address_combo.currentTextChanged.connect(self._refresh_qr); layout.addWidget(self.address_combo)
         self.copy_button = QPushButton("复制链接"); self.copy_button.setFixedHeight(32); self.copy_button.setProperty("kind", "secondary")
         self.copy_button.clicked.connect(self.copy_link)
@@ -603,15 +614,61 @@ QToolTip {{background:{p['surface']};color:{p['text']};border:1px solid {p['line
         remote.start()
         return remote
 
-    def _sync_remote_ui(self, error="手机遥控已关闭"):
-        self.address_combo.clear()
-        for address in lan_addresses() or ["127.0.0.1"]:
-            self.address_combo.addItem(f"{address}:{self.config.remote_port}", address)
-        if self.remote:
+    def _request_address_refresh(self):
+        if self.closed or not self.remote or self._address_probe_running:
+            return
+        self._address_probe_running = True
+        def discover():
+            try:
+                addresses = lan_addresses()
+            except Exception:
+                addresses = []
+            try:
+                if not self.closed:
+                    self.addresses_ready.emit(addresses)
+            except RuntimeError:
+                pass  # QApplication may already be shutting down.
+        threading.Thread(target=discover, daemon=True, name="lan-discovery").start()
+
+    def _select_network_address(self, index):
+        self._address_manually_selected = True
+
+    def _on_addresses_ready(self, addresses):
+        if self.closed:
+            return
+        self._address_probe_running = False
+        if addresses != self._known_addresses:
+            self._known_addresses = list(addresses)
+            if self.remote:
+                self._sync_remote_ui(discover=False)
+
+    def _sync_remote_ui(self, error="手机遥控已关闭", discover=True):
+        selected = self.address_combo.currentData()
+        previous_block = self.address_combo.blockSignals(True)
+        try:
+            self.address_combo.clear()
+            for address in self._known_addresses:
+                self.address_combo.addItem(f"{address}:{self.config.remote_port}", address)
+            if not self._known_addresses:
+                self.address_combo.addItem("等待局域网地址…", None)
+            if self._address_manually_selected and selected in self._known_addresses:
+                self.address_combo.setCurrentIndex(self.address_combo.findData(selected))
+            elif selected not in self._known_addresses:
+                self._address_manually_selected = False
+        finally:
+            self.address_combo.blockSignals(previous_block)
+        if self.remote and self._known_addresses:
             self.mobile_status.setText("已开启"); self._refresh_qr()
+        elif self.remote:
+            self.mobile_status.setText("等待网络")
+            self.qr_label.setPixmap(QPixmap())
+            self.qr_label.setText("正在发现局域网地址\n请确认电脑已连接网络\n地址将自动刷新")
         else:
             self.mobile_status.setText("未开启"); self.qr_label.setPixmap(QPixmap()); self.qr_label.setText(error)
-        self.copy_button.setEnabled(self.remote is not None); self.open_button.setEnabled(self.remote is not None)
+        self.copy_button.setEnabled(self.remote is not None and bool(self._known_addresses))
+        self.open_button.setEnabled(self.remote is not None)
+        if discover:
+            self._request_address_refresh()
 
     def apply_settings(self, candidate):
         previous = self.controller.config
@@ -647,7 +704,7 @@ QToolTip {{background:{p['surface']};color:{p['text']};border:1px solid {p['line
         self.qr_label.setPixmap(QPixmap.fromImage(qt_image).scaled(116, 116, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.FastTransformation))
 
     def copy_link(self):
-        if self.remote:
+        if self.remote and self.address_combo.currentData():
             QApplication.clipboard().setText(self.remote.url(self.address_combo.currentData())); self._log("手机控制链接已复制，发送到自己的手机即可打开。")
 
     def open_remote(self):
@@ -744,6 +801,7 @@ QToolTip {{background:{p['surface']};color:{p['text']};border:1px solid {p['line
             QApplication.instance().removeEventFilter(self)
             self._finish_theme_transition()
             self.closed = True; self.timer.stop()
+            self.network_timer.stop()
             for dialog in self.findChildren(QDialog):
                 dialog.close()
             if self.remote:
