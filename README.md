@@ -29,16 +29,16 @@ OBS Monitor 是一款 Windows 桌面工具。手机通过局域网网页连接�
 
 ## 下载
 
-当前版本：**2.2.3**。所有程序包均包含运行环境，无需安装 Python。
+当前版本：**2.2.4**。所有程序包均包含运行环境，无需安装 Python。
 
 | 平台 | 安装版 | 便携版 | 单文件 EXE |
 | --- | --- | --- | --- |
-| Windows x64 | [下载](https://github.com/ElmaTony/obs-monitor/releases/download/v2.2.3/obs-monitor-2.2.3-windows-x64-setup.exe) | [下载](https://github.com/ElmaTony/obs-monitor/releases/download/v2.2.3/obs-monitor-2.2.3-windows-x64-portable.zip) | [下载](https://github.com/ElmaTony/obs-monitor/releases/download/v2.2.3/obs-monitor-2.2.3-windows-x64.exe) |
-| Windows ARM64 | [下载](https://github.com/ElmaTony/obs-monitor/releases/download/v2.2.3/obs-monitor-2.2.3-windows-arm64-setup.exe) | [下载](https://github.com/ElmaTony/obs-monitor/releases/download/v2.2.3/obs-monitor-2.2.3-windows-arm64-portable.zip) | [下载](https://github.com/ElmaTony/obs-monitor/releases/download/v2.2.3/obs-monitor-2.2.3-windows-arm64.exe) |
+| Windows x64 | [下载](https://github.com/ElmaTony/obs-monitor/releases/download/v2.2.4/obs-monitor-2.2.4-windows-x64-setup.exe) | [下载](https://github.com/ElmaTony/obs-monitor/releases/download/v2.2.4/obs-monitor-2.2.4-windows-x64-portable.zip) | [下载](https://github.com/ElmaTony/obs-monitor/releases/download/v2.2.4/obs-monitor-2.2.4-windows-x64.exe) |
+| Windows ARM64 | [下载](https://github.com/ElmaTony/obs-monitor/releases/download/v2.2.4/obs-monitor-2.2.4-windows-arm64-setup.exe) | [下载](https://github.com/ElmaTony/obs-monitor/releases/download/v2.2.4/obs-monitor-2.2.4-windows-arm64-portable.zip) | [下载](https://github.com/ElmaTony/obs-monitor/releases/download/v2.2.4/obs-monitor-2.2.4-windows-arm64.exe) |
 
 Intel / AMD 电脑选择 x64；Windows ARM 设备选择 ARM64。安装版提供快捷方式与卸载入口，便携版解压后运行，单文件 EXE 可直接运行。
 
-[完整发行源码](https://github.com/ElmaTony/obs-monitor/releases/download/v2.2.3/obs-monitor-2.2.3-source.zip) · [SHA-256 校验清单](https://github.com/ElmaTony/obs-monitor/releases/download/v2.2.3/SHA256SUMS.txt) · [历史发行版本](https://github.com/ElmaTony/obs-monitor/releases)
+[完整发行源码](https://github.com/ElmaTony/obs-monitor/releases/download/v2.2.4/obs-monitor-2.2.4-source.zip) · [SHA-256 校验清单](https://github.com/ElmaTony/obs-monitor/releases/download/v2.2.4/SHA256SUMS.txt) · [历史发行版本](https://github.com/ElmaTony/obs-monitor/releases)
 
 运行要求：Windows 10 / 11 x64，或 Windows 11 ARM64，以及支持 **WebSocket v5** 的 OBS Studio。源码包用于查看源码、开发和构建，操作步骤见[开发说明](#开发)。
 
@@ -143,7 +143,7 @@ node test_mobile_races.cjs
 node test_mobile_pairing.cjs
 ```
 
-测试覆盖录制控制、原始字节、声音、设置、持久配对、连接恢复和乱序响应。源码在 Windows x64 与 ARM64 环境中进行[自动测试](https://github.com/ElmaTony/obs-monitor/actions)；发行程序另进行模拟 OBS 联调和安装卸载检查。手机脚本测试使用模拟浏览器环境；实际手机网络、防火墙和扬声器仍需在使用环境确认。
+测试覆盖录制控制、原始字节、声音、设置、持久配对、连接恢复和乱序响应。源码在 Windows x64 与 ARM64 环境中进行[自动测试](https://github.com/ElmaTony/obs-monitor/actions)；发行程序另进行模拟 OBS 联调和安装卸载检查。手机脚本测试使用模拟浏览器环境。2026-11-16 另使用 Windows x64 上的真实 OBS Studio 33.0.1（1080p60、NVENC、MKV）与安卓 Chrome 联调，验证两端控制、原始字节、关闭浏览器后复连和工具重启配对；修复版另通过每 6 秒一帧的实际收尾复测。
 
 完整发行源码包包含构建脚本和 `BUILDING.md`，可在对应架构的 Windows 环境中构建。
 
