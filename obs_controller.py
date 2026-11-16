@@ -146,11 +146,12 @@ class OBSController:
         self._snapshot_revision = 0
         self._instance_id = uuid.uuid4().hex
         self._settle_seconds = 0.2
+        self._drain_seconds = 0.0
 
     @property
     def control_timeout(self):
         with self._lock:
-            return max(7.0, self.confirmation_timeout + self._settle_seconds + 10.0)
+            return max(7.0, max(self.confirmation_timeout, self._drain_seconds) + self._settle_seconds + 10.0)
 
     def snapshot(self):
         with self._lock:
@@ -350,7 +351,13 @@ class OBSController:
                     raise OBSRequestError("当前状态不能" + LABELS[action])
                 self._state["busy"] = True
             # Video settings can change between recordings without reconnecting.
-            self._settle_seconds = max(0.2, 3 * self._client.get_frame_interval())
+            frame_interval = self._client.get_frame_interval()
+            with self._lock:
+                self._settle_seconds = max(0.2, 3 * frame_interval)
+                # OBS NVENC can queue up to 64 frames. Fractional frame rates
+                # can therefore take much longer to drain than to pause/resume.
+                # Keep a finite, frame-aware stop budget and never replay StopRecord.
+                self._drain_seconds = 64 * frame_interval if action == "stop" else 0.0
             if self._stop.is_set() or self._reconnect.is_set():
                 raise OBSRequestError("软件已关闭或 OBS 连接已重置，操作未执行")
             response = self._client.request(REQUESTS[action])
@@ -361,7 +368,7 @@ class OBSController:
             # timestamps. A second pause during that interval is silently ignored by
             # OBS. Keep the transition busy for at least three video frame intervals,
             # and require the target state to stay stable throughout that window.
-            deadline = time.monotonic() + self.confirmation_timeout + self._settle_seconds
+            deadline = time.monotonic() + max(self.confirmation_timeout, self._drain_seconds) + self._settle_seconds
             confirmed_since = None
             while not self._stop.is_set() and not self._reconnect.is_set():
                 data = self._client.get_record_status()
@@ -381,6 +388,8 @@ class OBSController:
                 if confirmed_since is not None and now - confirmed_since >= self._settle_seconds:
                     break
                 if now >= deadline:
+                    if action == "stop":
+                        raise OBSRequestError("OBS 已接收结束录制请求，但尚未完成收尾；请检查 OBS 当前状态")
                     raise OBSRequestError("OBS 已接收请求，但录制状态未改变；请检查 OBS 中的对话框、录制编码器和当前状态")
                 self._stop.wait(0.08)
             else:
@@ -395,6 +404,8 @@ class OBSController:
             future.set_exception(ConnectionError("连接中断，操作结果未知；请查看 OBS 状态后再操作"))
             raise exc
         finally:
+            with self._lock:
+                self._drain_seconds = 0.0
             self._update(busy=False)
 
     def _fail_pending(self, message):

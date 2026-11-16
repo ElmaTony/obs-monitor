@@ -260,6 +260,78 @@ class ControllerTests(unittest.TestCase):
         self.assertTrue(future.result()['ok'])
         self.assertGreaterEqual(clock[0], 6)
 
+    def test_fractional_fps_stop_waits_for_encoder_drain_without_replaying(self):
+        clock = [0.0]
+        draining = [False]
+        self.fake.active, self.fake.paused = True, True
+        self.fake.get_frame_interval = lambda: 6.0
+        self.controller._client = self.fake
+        original_status = self.fake.get_record_status
+        def status():
+            if draining[0]:
+                self.fake.active = clock[0] < 106
+                self.fake.bytes = int(min(clock[0], 106) * 100)
+            return original_status()
+        def request(name):
+            self.fake.requests.append(name)
+            draining[0], self.fake.paused = True, False
+            return {"outputPath": "D:/recording.mkv"}
+        def advance(seconds):
+            clock[0] += seconds
+            return False
+        self.fake.get_record_status, self.fake.request = status, request
+        future = Future()
+        with patch.object(core.time, 'monotonic', side_effect=lambda: clock[0]), \
+             patch.object(self.controller._stop, 'wait', side_effect=advance):
+            self.controller._execute('stop', future, 0)
+        self.assertTrue(future.result()['ok'])
+        self.assertGreaterEqual(clock[0], 124)
+        self.assertLess(clock[0], 125)
+        self.assertEqual(self.fake.requests, ['StopRecord'])
+        self.assertEqual([p for k, p in self.events if k == 'action'], ['stop'])
+        self.assertFalse(self.controller.snapshot()['busy'])
+
+    def test_unfinished_encoder_drain_has_a_finite_deadline_and_no_success_sound(self):
+        clock = [0.0]
+        self.fake.active = True
+        self.fake.get_frame_interval = lambda: 6.0
+        self.fake.request = lambda name: self.fake.requests.append(name) or {}
+        self.controller._client = self.fake
+        def advance(seconds):
+            clock[0] += seconds
+            self.fake.bytes += 1  # Ongoing output cannot extend the wait forever.
+            return False
+        future = Future()
+        with patch.object(core.time, 'monotonic', side_effect=lambda: clock[0]), \
+             patch.object(self.controller._stop, 'wait', side_effect=advance):
+            self.controller._execute('stop', future, 0)
+        with self.assertRaisesRegex(core.OBSRequestError, '尚未完成收尾'):
+            future.result()
+        self.assertLess(clock[0], 403)
+        self.assertFalse(any(k == 'action' for k, _ in self.events))
+        self.assertFalse(self.controller.snapshot()['busy'])
+        self.assertLess(self.controller.control_timeout, 40)
+        self.assertEqual(self.fake.requests, ['StopRecord'])
+
+    def test_normal_fps_stop_confirms_promptly_and_clears_its_wait_budget(self):
+        clock = [0.0]
+        budgets = []
+        self.fake.active = True
+        self.fake.get_frame_interval = lambda: 1 / 60
+        self.controller._client = self.fake
+        def advance(seconds):
+            budgets.append(self.controller.control_timeout)
+            clock[0] += seconds
+            return False
+        future = Future()
+        with patch.object(core.time, 'monotonic', side_effect=lambda: clock[0]), \
+             patch.object(self.controller._stop, 'wait', side_effect=advance):
+            self.controller._execute('stop', future, 0)
+        self.assertTrue(future.result()['ok'])
+        self.assertLess(clock[0], 0.4)
+        self.assertTrue(all(budget < 15 for budget in budgets))
+        self.assertLess(self.controller.control_timeout, 15)
+
     def test_rapid_controls_wait_for_encoder_pause_timestamps_to_clear(self):
         original = self.fake.request
         resumed_at = [None]
