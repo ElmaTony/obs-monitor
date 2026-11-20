@@ -226,6 +226,25 @@ async function controlTimeoutAdaptsToRefreshedConfirmationBudget() {
   assert.equal(h.requests.filter(r=>r.url==='/api/control').length,1);
 }
 
+async function initialNoSampleDoesNotAppendPreviousDataLabel() {
+  const h=harness();
+  await h.respond(h.pending('/api/status'),state(1,false,{connected:false,stale:true,active:false,bytes:0,data_age_ms:null,size_text:'—',size_exact_text:'尚未收到 OBS 数据',allowed:{start:false,pause:false,resume:false,stop:false}}));
+  assert.equal(h.ids.exactSize.textContent,'尚未收到 OBS 数据');
+  await h.advance(800);
+  await h.respond(h.pending('/api/status'),state(2,false,{connected:false,stale:true,data_age_ms:5000}));
+  assert.equal(h.ids.exactSize.textContent,'1,048,576 字节 · 上次有效数据');
+}
+
+async function nonJsonErrorResponseShowsFallbackMessage() {
+  const h=harness();await h.initial();
+  const click=h.button('pause').listeners.click();
+  const command=h.pending('/api/control');command.done=true;
+  command.resolve({ok:false,status:502,json:async()=>{throw new SyntaxError('Unexpected token');}});
+  await click;
+  assert.equal(h.ids.toast.textContent,'操作失败');
+  assert.deepEqual(h.errors,[]);
+}
+
 module.exports = {harness, state, flush};
 if (require.main === module) (async()=>{
   let failed=0;
@@ -234,7 +253,8 @@ if (require.main === module) (async()=>{
     rejectedControlRefreshesStateWithoutRetry,unknownControlResultReconcilesWithoutReplay,newerPollWinsOverLateControlResponse,
     duplicateTapDoesNotSendDuplicateCommand,failedSoundSaveRestoresServerState,timedOutPollRecoversAndMatchesVisualAvailability,
     slowControlUsesTheDesktopConfirmationBudget,pendingControlKeepsRecordingMetricsLive,
-    controlTimeoutAdaptsToRefreshedConfirmationBudget]) {
+    controlTimeoutAdaptsToRefreshedConfirmationBudget,initialNoSampleDoesNotAppendPreviousDataLabel,
+    nonJsonErrorResponseShowsFallbackMessage]) {
     try {await test();console.log('PASS',test.name);} catch(error){failed++;console.error('FAIL',test.name,error.message);}
   }
   if(failed) process.exitCode=1;

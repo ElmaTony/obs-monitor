@@ -211,6 +211,45 @@ async function oldSuccessfulResponseCannotOverwriteStateAfterNewPairing() {
   assert.equal(h.button('pause').disabled, false);
 }
 
+async function reconnectionUnlocksControlsImmediatelyWhileOldControlStillInFlight() {
+  const h = harness(false, {hash:'#token='+savedToken}); await h.initial();
+  const oldClick = h.button('pause').listeners.click();
+  const oldControl = h.pending('/api/control');
+  h.events.pageshow();
+  await h.respond(h.pending('/api/status'), {message:'Pairing was reset'}, 401);
+  const replacement = 'E'.repeat(43);
+  h.ids.pairLink.value = 'http://pc:8765/#token='+replacement;
+  h.ids.pairConnect.listeners.click();
+  await h.respond(h.pending('/api/status'), state(30, false));
+  // Before the obsolete control request settles, the new pairing must already be usable.
+  assert.equal(h.button('pause').disabled, false);
+  const newClick = h.button('pause').listeners.click();
+  const newControl = h.requests.filter(r=>!r.done && !r.options.signal.aborted && r.url==='/api/control').at(-1);
+  assert.ok(newControl && newControl !== oldControl);
+  // Late settlement of the old control must not clear the new control's pending lock.
+  await h.respond(oldControl, {message:'Old token is no longer valid'}, 401); await oldClick;
+  assert.ok(h.buttons.every(button=>button.disabled));
+  await h.respond(newControl, {ok:true,message:'暂停成功',state:state(31, true)}); await newClick;
+  assert.equal(h.button('resume').disabled, false);
+}
+
+async function forgetReceivingUnauthorizedTransitionsDirectlyToPairing() {
+  const h = harness(false, {hash:'#token='+savedToken}); await h.initial();
+  const forget = h.ids.forget.listeners.click();
+  await h.respond(h.pending('/api/unpair'), {message:'配对已重置'}, 401); await forget;
+  assert.equal(h.ids.pairing.hidden, false);
+  assert.equal(h.local.has('obs-token'), false);
+  assert.equal(h.ids.toast.textContent, '');
+}
+
+async function malformedPairingLinkShowsLocalizedError() {
+  const h = harness(false, {hash:''});
+  await h.respond(h.pending('/api/status'), {message:'尚未配对'}, 401);
+  h.ids.pairLink.value = 'http://[invalid';
+  h.ids.pairConnect.listeners.click();
+  assert.ok(h.ids.notice.textContent.includes('复制链接'));
+}
+
 (async()=>{
   let failed = 0;
   const tests = [closeAndReopenBrowserAtRoot,cookieOnlyPairingWorksWithBlockedStorage,
@@ -221,7 +260,9 @@ async function oldSuccessfulResponseCannotOverwriteStateAfterNewPairing() {
     restartedDesktopAcceptsLowerRevisionAndIgnoresOldInstance,hiddenPageStopsPollingAndImmediatelyResumes,
     deviceSleepExpiresStateEvenWhenMonotonicClockStops,networkBackoffAndManualReconnectRecoverPairing,
     oldUnauthorizedSoundResponseCannotEraseNewPairing,oldControlResponseCannotUnpairAfterDesktopResetAndReconnection,
-    oldSuccessfulResponseCannotOverwriteStateAfterNewPairing];
+    oldSuccessfulResponseCannotOverwriteStateAfterNewPairing,
+    reconnectionUnlocksControlsImmediatelyWhileOldControlStillInFlight,
+    forgetReceivingUnauthorizedTransitionsDirectlyToPairing,malformedPairingLinkShowsLocalizedError];
   for (const test of tests) {
     try {await test();console.log('PASS',test.name);} catch(error){failed++;console.error('FAIL',test.name,error.message);}
   }

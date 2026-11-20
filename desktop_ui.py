@@ -10,7 +10,7 @@ import qrcode
 from PySide6.QtCore import Qt, QTimer, QSize, QRectF, QEvent, QVariantAnimation, QEasingCurve, Signal
 from PySide6.QtGui import QColor, QFont, QIcon, QImage, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
-    QFormLayout, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow,
+    QFormLayout, QFrame, QHBoxLayout, QLabel, QLineEdit, QMainWindow,
     QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QSizePolicy, QSpinBox,
     QToolButton, QVBoxLayout, QWidget, QAbstractSpinBox)
 
@@ -106,7 +106,7 @@ class ToggleSwitch(QCheckBox):
 
     def paintEvent(self, event):
         owner = self.window()
-        if not hasattr(owner, "palette_values"):
+        if owner and not hasattr(owner, "palette_values"):
             owner = owner.parentWidget()
         p = getattr(owner, "palette_values", PALETTES["light"])
         painter = QPainter(self)
@@ -133,9 +133,10 @@ class ChoiceCheck(QCheckBox):
 
     def paintEvent(self, event):
         owner = self.window()
-        if not hasattr(owner, "palette_values"):
+        if owner and not hasattr(owner, "palette_values"):
             owner = owner.parentWidget()
         p = getattr(owner, "palette_values", PALETTES["light"])
+        theme = getattr(getattr(owner, "config", None), "theme", "light")
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         y = (self.height() - 16) / 2
@@ -143,7 +144,7 @@ class ChoiceCheck(QCheckBox):
         painter.setBrush(QColor(p["accent"] if self.isChecked() else p["subtle"]))
         painter.drawRoundedRect(QRectF(0.5, y, 16, 16), 5, 5)
         if self.isChecked():
-            painter.setPen(QPen(QColor("white" if getattr(owner, "config", AppConfig()).theme == "light" else "#17233b"), 1.6))
+            painter.setPen(QPen(QColor("white" if theme == "light" else "#17233b"), 1.6))
             painter.drawLine(4, int(y + 8), 7, int(y + 11))
             painter.drawLine(7, int(y + 11), 12, int(y + 5))
         painter.setPen(QColor(p["text"]))
@@ -417,14 +418,9 @@ QPushButton[action='resume'] {{color:{p['accent']};}}
 QPushButton[action='stop'] {{color:{p['red']};}}
 QPushButton[kind='action']:disabled {{color:{p['disabled']};background:{p['subtle']};border-color:{p['line']};}}
 QPushButton[kind='secondary'] {{background:{p['soft']};color:{p['accent']};border-color:transparent;font-weight:600;}}
-QPushButton[kind='link'] {{background:transparent;border:0;padding:3px;color:{p['muted']};font-size:11px;}}
 QToolButton {{background:transparent;border:0;border-radius:6px;padding:3px;}}
 QToolButton:hover {{background:{p['subtle']};}}
 QCheckBox {{spacing:7px;font-size:12px;}}
-QCheckBox::indicator {{width:15px;height:15px;border:1px solid {p['line']};border-radius:5px;background:{p['subtle']};}}
-QCheckBox::indicator:checked {{background:{p['accent']};border:1px solid {p['accent']};}}
-#masterSwitch::indicator {{width:33px;height:17px;border-radius:9px;background:{p['disabled']};border:0;}}
-#masterSwitch::indicator:checked {{background:{p['accent']};}}
 QComboBox, QLineEdit, QSpinBox, QDoubleSpinBox {{background:{p['subtle']};border:1px solid {p['line']};border-radius:7px;padding:4px 8px;min-height:18px;}}
 QComboBox:focus, QLineEdit:focus {{border-color:{p['accent']};}}
 QFrame[kind='numberField'] {{background:{p['subtle']};border:1px solid {p['line']};border-radius:8px;}}
@@ -506,7 +502,7 @@ QToolTip {{background:{p['surface']};color:{p['text']};border:1px solid {p['line
                 # Qt can refresh the native caption after show/activation.
                 # Reapply custom colors after that refresh, including mid-fade.
                 self._sync_title_bars(self._title_colors)
-                QTimer.singleShot(0, lambda: self._sync_title_bars(self._title_colors))
+                QTimer.singleShot(0, self, lambda: self._sync_title_bars(self._title_colors))
         return super().eventFilter(watched, event)
 
     def resizeEvent(self, event):
@@ -551,7 +547,7 @@ QToolTip {{background:{p['surface']};color:{p['text']};border:1px solid {p['line
         self.state_label.setStyleSheet(f"color:{p[mode] if mode else p['muted']};background:{p[mode+'_bg'] if mode else p['subtle']};padding:5px 10px;border-radius:12px;")
         self.clock_label.setText(state["duration_text"]); self.clock_caption.setText("上次录制时长" if not state["active"] and state["bytes"] else "录制时长")
         self.size_label.setText(state["size_text"]); self.threshold_label.setText(f"{self.config.threshold_gb:g} GB" if self.config.alert_enabled else "已关闭")
-        self.size_exact_label.setText(state["size_exact_text"] + (" · 上次数据" if state["stale"] else ""))
+        self.size_exact_label.setText(state["size_exact_text"] + (" · 上次数据" if state["stale"] and state["data_age_ms"] is not None else ""))
         self.progress.setValue(min(1000, int(state["bytes"] / max(1, state["threshold_bytes"]) * 1000)))
         self.limit_label.setText("数据已过期，等待重新连接 OBS" if state["stale"] else "本次录制已触发大小提醒" if state["alerted"] else "OBS 累计输出量 · 不依赖目录显示大小")
         self.sound_switch.blockSignals(True); self.sound_switch.setChecked(state["sound_enabled"]); self.sound_switch.blockSignals(False)
@@ -584,6 +580,7 @@ QToolTip {{background:{p['surface']};color:{p['text']};border:1px solid {p['line
         try:
             self.controller.set_sound_enabled(enabled)
         except OSError as exc:
+            self.sound_switch.blockSignals(True); self.sound_switch.setChecked(self.config.sound_enabled); self.sound_switch.blockSignals(False)
             self._log("提示音保存失败：" + str(exc))
 
     def _save_sound_actions(self):
@@ -759,8 +756,10 @@ QToolTip {{background:{p['surface']};color:{p['text']};border:1px solid {p['line
         def apply():
             try:
                 address = host.text().strip() or "127.0.0.1"
-                if any(c in address for c in "/?#@\\ \t\n"):
+                if any(c in address for c in "/?#@\\") or any(c.isspace() for c in address):
                     raise ValueError("OBS 地址请只填写 IP 或主机名")
+                if address.count(":") == 1:
+                    raise ValueError("OBS 地址请只填写 IP 或主机名，端口请在下方单独填写")
                 if port.value() == remote_port.value() and remote_enabled.isChecked():
                     raise ValueError("手机端口不能与 OBS WebSocket 端口相同")
                 candidate = AppConfig(obs_host=address, obs_port=port.value(), obs_password=password.text(), remote_port=remote_port.value(),

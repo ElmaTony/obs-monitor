@@ -49,6 +49,8 @@ class SingleInstance(QObject):
             connection.readyRead.connect(connection.readAll)
             connection.readAll()
             connection.disconnectFromServer()
+            if connection.state() == QLocalSocket.LocalSocketState.UnconnectedState:
+                connection.deleteLater()
             self.activate.emit()
 
     def close(self):

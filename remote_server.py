@@ -37,11 +37,19 @@ def lan_addresses():
         addresses.extend(socket.gethostbyname_ex(socket.gethostname())[2])
     except OSError:
         pass
-    addresses = list(dict.fromkeys(ip for ip in addresses if not ip.startswith(("127.", "169.254."))))
     # VPN benchmark addresses (198.18/15) are not reachable from a phone's Wi-Fi.
     benchmark = ipaddress.ip_network("198.18.0.0/15")
-    addresses = [ip for ip in addresses if ipaddress.ip_address(ip) not in benchmark]
-    return sorted(addresses, key=lambda ip: (ip != preferred, 0 if ip.startswith("192.168.") else 1 if ip.startswith("10.") else 2))
+    valid = []
+    for ip in dict.fromkeys(addresses):
+        try:
+            parsed = ipaddress.IPv4Address(ip)
+        except ValueError:
+            continue
+        if (parsed.is_loopback or parsed.is_link_local or parsed.is_unspecified
+                or parsed.is_multicast or parsed.is_reserved or parsed in benchmark):
+            continue
+        valid.append(ip)
+    return sorted(valid, key=lambda ip: (ip != preferred, 0 if ip.startswith("192.168.") else 1 if ip.startswith("10.") else 2))
 
 
 class RemoteServer:
@@ -99,7 +107,7 @@ class RemoteServer:
                     self.send_header("Connection", "close")
                     if forget:
                         self.send_header("Set-Cookie", f"{PAIRING_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict")
-                    elif getattr(self, "_renew_pairing", False) and self._pairing_token == owner.token:
+                    elif getattr(self, "_renew_pairing", False) and hmac.compare_digest(self._pairing_token, owner.token):
                         self.send_header("Set-Cookie", f"{PAIRING_COOKIE}={self._pairing_token}; Path=/; Max-Age={PAIRING_MAX_AGE}; HttpOnly; SameSite=Strict")
                     self.end_headers()
                     self.wfile.write(data)
@@ -184,9 +192,14 @@ class RemoteServer:
                         try:
                             remaining = owner.controller.control_timeout - (time.monotonic() - started)
                             result = future.result(timeout=max(0, min(0.25, remaining)))
-                        except FutureTimeout as exc:
+                        except FutureTimeout:
                             if future.done():
-                                self.send_payload(409, {"ok": False, "message": str(exc)})
+                                try:
+                                    result = future.result(timeout=0)
+                                except Exception as real_exc:
+                                    self.send_payload(409, {"ok": False, "message": str(real_exc) or "操作超时"})
+                                else:
+                                    self.send_payload(200, result)
                                 break
                             # The controller refreshes the frame rate after dispatch.
                             # Extend the wait if that changes its confirmation budget.

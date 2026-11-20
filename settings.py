@@ -45,8 +45,11 @@ class AppConfig:
         if isinstance(raw.get("obs_host"), str):
             result.obs_host = raw["obs_host"].strip() or host
         for key in ("obs_port", "remote_port"):
+            raw_value = raw.get(key, getattr(result, key))
+            if isinstance(raw_value, bool):
+                continue
             try:
-                value = int(raw.get(key, getattr(result, key)))
+                value = int(raw_value)
                 if 1 <= value <= 65535:
                     setattr(result, key, value)
             except (TypeError, ValueError, OverflowError):
@@ -58,12 +61,14 @@ class AppConfig:
             for key in ACTIONS:
                 if isinstance(raw["sound_actions"].get(key), bool):
                     result.sound_actions[key] = raw["sound_actions"][key]
-        try:
-            threshold = float(raw.get("threshold_gb", result.threshold_gb))
-            if math.isfinite(threshold) and 0.1 <= threshold <= 102400:
-                result.threshold_gb = threshold
-        except (TypeError, ValueError, OverflowError):
-            pass
+        raw_threshold = raw.get("threshold_gb", result.threshold_gb)
+        if not isinstance(raw_threshold, bool):
+            try:
+                threshold = float(raw_threshold)
+                if math.isfinite(threshold) and 0.1 <= threshold <= 102400:
+                    result.threshold_gb = threshold
+            except (TypeError, ValueError, OverflowError):
+                pass
         return result
 
     def save(self, save_password=False):

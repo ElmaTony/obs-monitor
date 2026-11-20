@@ -49,7 +49,10 @@ def animations_enabled():
 
 def detect_obs_websocket_settings() -> tuple[str, int, str]:
     """Read local obs-websocket settings when the user has enabled the server."""
-    config_root = Path(os.environ.get("APPDATA", "")) / "obs-studio" / "plugin_config"
+    appdata = os.environ.get("APPDATA", "")
+    if not appdata:
+        return "127.0.0.1", 4455, ""
+    config_root = Path(appdata) / "obs-studio" / "plugin_config"
     candidates = (
         config_root / "obs-websocket" / "config.json",
         config_root / "obs-websocket.json",
@@ -64,12 +67,17 @@ def detect_obs_websocket_settings() -> tuple[str, int, str]:
         enabled = raw.get("server_enabled", raw.get("enabled", True))
         if not enabled:
             continue
-        try:
-            port = int(raw.get("server_port", raw.get("port", 4455)))
-        except (TypeError, ValueError, OverflowError):
-            port = 4455
+        raw_port = raw.get("server_port", raw.get("port", 4455))
+        port = 4455
+        if not isinstance(raw_port, bool):
+            try:
+                parsed = int(raw_port)
+                if 1 <= parsed <= 65535:
+                    port = parsed
+            except (TypeError, ValueError, OverflowError):
+                pass
         password = raw.get("server_password", raw.get("password", ""))
-        return "127.0.0.1", max(1, min(65535, port)), str(password or "")
+        return "127.0.0.1", port, str(password or "")
     return "127.0.0.1", 4455, ""
 
 
@@ -234,6 +242,9 @@ class AudioPlayer:
 
     def play(self, name: str) -> None:
         path = SOUND_DIR / f"{name}.wav"
+        if not path.exists() and name in self.SOUND_RECIPES:
+            SOUND_DIR.mkdir(parents=True, exist_ok=True)
+            self._write_tone(path, self.SOUND_RECIPES[name])
         winsound.PlaySound(
             str(path), winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_NODEFAULT
         )

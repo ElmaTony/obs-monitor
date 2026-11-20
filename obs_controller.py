@@ -77,7 +77,8 @@ class OBSWebSocketClient:
             if not status.get("result"):
                 comment = status.get("comment") or f"请求失败（{status.get('code', '未知错误')}）"
                 raise OBSRequestError(comment)
-            return data.get("responseData", {})
+            response = data.get("responseData")
+            return {} if response is None else response
         raise TimeoutError("OBS 响应超时")
 
     def get_record_status(self):
@@ -95,6 +96,8 @@ class OBSWebSocketClient:
 
     def get_frame_interval(self):
         data = self.request("GetVideoSettings")
+        if not isinstance(data, dict):
+            raise ValueError("OBS 未返回有效的帧率，无法确认录制切换的稳定状态")
         numerator, denominator = data.get("fpsNumerator"), data.get("fpsDenominator")
         if any(isinstance(value, bool) or not isinstance(value, int) or value <= 0
                for value in (numerator, denominator)):
@@ -337,6 +340,7 @@ class OBSController:
     def _execute(self, action, future, queued_at):
         if not future.set_running_or_notify_cancel():
             return
+        request_sent = False
         try:
             if time.monotonic() - queued_at > 6:
                 raise OBSRequestError("操作等待超时，请确认当前状态后重试")
@@ -360,9 +364,11 @@ class OBSController:
                 self._drain_seconds = 64 * frame_interval if action == "stop" else 0.0
             if self._stop.is_set() or self._reconnect.is_set():
                 raise OBSRequestError("软件已关闭或 OBS 连接已重置，操作未执行")
+            request_sent = True
             response = self._client.request(REQUESTS[action])
-            if action == "stop":
-                self._update(last_file=response.get("outputPath", ""))
+            if action == "stop" and isinstance(response, dict):
+                output_path = response.get("outputPath")
+                self._update(last_file=output_path if isinstance(output_path, str) else "")
             # OBS queues control requests. Confirm the actual output state before success.
             # An unpaused output flag can precede the encoder clearing its old pause
             # timestamps. A second pause during that interval is silently ignored by
@@ -393,20 +399,36 @@ class OBSController:
                     raise OBSRequestError("OBS 已接收请求，但录制状态未改变；请检查 OBS 中的对话框、录制编码器和当前状态")
                 self._stop.wait(0.08)
             else:
-                raise OBSRequestError("软件已关闭，操作结果未确认")
+                raise OBSRequestError("软件已关闭或连接已重置，操作结果未确认")
+            with self._lock:
+                if self._stop.is_set() or self._reconnect.is_set():
+                    raise OBSRequestError("软件已关闭或连接已重置，操作结果未确认")
+                self._drain_seconds = 0.0
+                self._state["busy"] = False
+                final_state = self.snapshot()
             self.on_event("action", action)
-            self._update(busy=False)
-            future.set_result({"ok": True, "message": LABELS[action] + "成功", "state": self.snapshot()})
+            future.set_result({"ok": True, "message": LABELS[action] + "成功", "state": final_state})
         except OBSRequestError as exc:
-            future.set_exception(exc)
+            with self._lock:
+                self._drain_seconds = 0.0
+                self._state["busy"] = False
             self.on_event("error", str(exc))
+            future.set_exception(exc)
         except Exception as exc:
-            future.set_exception(ConnectionError("连接中断，操作结果未知；请查看 OBS 状态后再操作"))
+            with self._lock:
+                self._drain_seconds = 0.0
+                self._state["busy"] = False
+            if request_sent:
+                future.set_exception(ConnectionError("连接中断，操作结果未知；请查看 OBS 状态后再操作"))
+            elif isinstance(exc, ValueError):
+                future.set_exception(OBSRequestError(str(exc)))
+            else:
+                future.set_exception(ConnectionError("OBS 连接中断，操作未执行"))
             raise exc
         finally:
             with self._lock:
                 self._drain_seconds = 0.0
-            self._update(busy=False)
+                self._state["busy"] = False
 
     def _fail_pending(self, message):
         while True:
@@ -429,30 +451,33 @@ class OBSController:
                 if self._stop.is_set():
                     break
                 client.connect()
-                self._settle_seconds = max(0.2, 3 * client.get_frame_interval())
+                frame_interval = client.get_frame_interval()
                 data = client.get_record_status()
                 with self._lock:
                     if self._stop.is_set() or self._reconnect.is_set():
                         continue
+                    self._settle_seconds = max(0.2, 3 * frame_interval)
                     self._observe(data)
                 self.on_event("log", "OBS 已连接")
                 self._last_error = ""
                 next_poll = time.monotonic() + self.interval
                 while not self._stop.is_set() and not self._reconnect.is_set():
+                    self._wake.clear()
                     try:
                         command = self._commands.get_nowait()
                     except queue.Empty:
                         command = None
                     if command:
                         self._execute(*command)
+                        continue
                     if time.monotonic() >= next_poll:
                         data = client.get_record_status()
                         with self._lock:
                             if not self._stop.is_set() and not self._reconnect.is_set():
                                 self._observe(data)
                         next_poll = time.monotonic() + self.interval
-                    self._wake.wait(max(0.01, min(self.interval, next_poll - time.monotonic())))
-                    self._wake.clear()
+                    if not self._stop.is_set() and not self._reconnect.is_set() and self._commands.empty():
+                        self._wake.wait(max(0.01, min(self.interval, next_poll - time.monotonic())))
             except Exception as exc:
                 message = f"无法连接 OBS：{exc}"
                 self._update(connected=False, busy=False, message="未连接 OBS · 请打开 OBS 并检查 WebSocket 设置")
