@@ -250,6 +250,17 @@ async function malformedPairingLinkShowsLocalizedError() {
   assert.ok(h.ids.notice.textContent.includes('复制链接'));
 }
 
+async function enterKeyInPairingInputSubmitsLink() {
+  const h = harness(false, {hash:''});
+  await h.respond(h.pending('/api/status'), {message:'尚未配对'}, 401);
+  h.ids.pairLink.value = 'http://pc:8765/#token='+savedToken;
+  h.ids.pairLink.listeners.keydown({key:'Enter'});
+  const request = h.pending('/api/status');
+  assert.equal(request.options.headers['X-OBS-Token'], savedToken);
+  await h.respond(request, state());
+  assert.equal(h.ids.pairing.hidden, true);
+}
+
 (async()=>{
   let failed = 0;
   const tests = [closeAndReopenBrowserAtRoot,cookieOnlyPairingWorksWithBlockedStorage,
@@ -262,7 +273,8 @@ async function malformedPairingLinkShowsLocalizedError() {
     oldUnauthorizedSoundResponseCannotEraseNewPairing,oldControlResponseCannotUnpairAfterDesktopResetAndReconnection,
     oldSuccessfulResponseCannotOverwriteStateAfterNewPairing,
     reconnectionUnlocksControlsImmediatelyWhileOldControlStillInFlight,
-    forgetReceivingUnauthorizedTransitionsDirectlyToPairing,malformedPairingLinkShowsLocalizedError];
+    forgetReceivingUnauthorizedTransitionsDirectlyToPairing,malformedPairingLinkShowsLocalizedError,
+    enterKeyInPairingInputSubmitsLink];
   for (const test of tests) {
     try {await test();console.log('PASS',test.name);} catch(error){failed++;console.error('FAIL',test.name,error.message);}
   }

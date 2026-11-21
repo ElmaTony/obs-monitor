@@ -935,6 +935,8 @@ class DesktopTests(unittest.TestCase):
         self.assertIsNone(self.app._theme_animation)
 
     def test_reduced_motion_and_resize_leave_no_transition_layer(self):
+        from PySide6.QtCore import QSize
+        from PySide6.QtGui import QResizeEvent
         self.app.show(); self.qt.processEvents()
         with patch('desktop_ui.animations_enabled', return_value=False), patch.object(self.config, 'save'):
             self.app.apply_theme('dark')
@@ -942,9 +944,57 @@ class DesktopTests(unittest.TestCase):
         with patch('desktop_ui.animations_enabled', return_value=True), patch.object(self.config, 'save'):
             self.app.apply_theme('light')
         self.assertIsNotNone(self.app._theme_animation)
-        self.app.resize(800, 560); self.qt.processEvents()
+        self.qt.sendEvent(self.app, QResizeEvent(QSize(800, 540), self.app.size()))
+        self.qt.processEvents()
         self.assertIsNone(self.app._theme_animation)
         self.assertEqual(self.app._theme_overlays, [])
+
+    def test_main_window_uses_fixed_compact_size_and_clamps_for_small_screens(self):
+        from PySide6.QtCore import QRect, Qt
+        from desktop_ui import WINDOW_HEIGHT, WINDOW_WIDTH
+        self.assertEqual(self.app.minimumSize(), self.app.maximumSize())
+        self.assertFalse(bool(self.app.windowFlags() & Qt.WindowType.WindowMaximizeButtonHint))
+        self.app._apply_fixed_window_size(QRect(0, 0, 1920, 1040))
+        self.assertEqual((self.app.width(), self.app.height()), (WINDOW_WIDTH, WINDOW_HEIGHT))
+        self.app._apply_fixed_window_size(QRect(0, 0, 800, 540))
+        self.assertEqual((self.app.width(), self.app.height()), (768, 508))
+        self.assertEqual(self.app.minimumSize(), self.app.maximumSize())
+
+    def test_activity_feed_records_newest_first_syncs_dialog_and_clears_cleanly(self):
+        from PySide6.QtCore import QCoreApplication, QEvent
+        from PySide6.QtWidgets import QDialog
+        from desktop_ui import ActivityDelegate
+        self.app.show(); self.qt.processEvents()
+        self.app._log('第一条操作', level='accent')
+        self.app._log('第二条错误', level='red')
+        self.assertEqual(self.app.activity_list.item(0).data(ActivityDelegate.ROLE_MESSAGE), '第二条错误')
+        self.assertEqual(self.app.activity_list.item(0).data(ActivityDelegate.ROLE_LEVEL), 'red')
+        self.app.open_activity_log(); self.qt.processEvents()
+        self.assertIsNotNone(self.app.activity_window)
+        self.assertTrue(self.app.activity_window.isVisible())
+        self.app._log('实时同步记录', level='amber')
+        self.assertEqual(self.app._activity_dialog_list.item(0).data(ActivityDelegate.ROLE_MESSAGE), '实时同步记录')
+        self.app.clear_activity_log()
+        self.assertEqual(self.app.activity_list.count(), 0)
+        self.assertEqual(self.app._activity_dialog_list.count(), 0)
+        self.assertTrue(self.app.activity_empty_label.isVisible())
+        self.assertTrue(self.app._activity_dialog_empty.isVisible())
+        self.assertFalse(self.app._activity_dialog_copy.isEnabled())
+        self.assertFalse(self.app._activity_dialog_clear.isEnabled())
+        self.app.activity_window.reject(); self.qt.processEvents()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        self.assertIsNone(self.app.activity_window)
+        self.assertEqual(self.app.findChildren(QDialog), [])
+
+    def test_disabled_size_alert_keeps_progress_at_zero_and_muted_sound_dims_actions(self):
+        self.app.show(); self.qt.processEvents()
+        self.config.alert_enabled = False
+        self.config.sound_enabled = False
+        self.app.controller._observe({"outputActive": True, "outputBytes": 10 * 1024**3})
+        self.app._tick()
+        self.assertEqual(self.app.progress.value(), 0)
+        self.assertTrue(self.app.sound_muted_label.isVisible())
+        self.assertTrue(all(item._dimmed for item in self.app.sound_vars.values()))
 
     def test_switch_entire_visible_surface_accepts_clicks(self):
         from PySide6.QtCore import QPoint, Qt

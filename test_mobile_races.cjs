@@ -245,6 +245,13 @@ async function nonJsonErrorResponseShowsFallbackMessage() {
   assert.deepEqual(h.errors,[]);
 }
 
+async function disabledSizeAlertDoesNotTurnProgressBarRed() {
+  const h=harness();
+  await h.respond(h.pending('/api/status'),state(1,false,{alert_enabled:false,bytes:10*1073741824,threshold_bytes:1073741824}));
+  assert.equal(h.ids.fill.style.width,'0%');
+  assert.notEqual(h.ids.fill.style.background,'var(--red)');
+}
+
 module.exports = {harness, state, flush};
 if (require.main === module) (async()=>{
   let failed=0;
@@ -254,7 +261,7 @@ if (require.main === module) (async()=>{
     duplicateTapDoesNotSendDuplicateCommand,failedSoundSaveRestoresServerState,timedOutPollRecoversAndMatchesVisualAvailability,
     slowControlUsesTheDesktopConfirmationBudget,pendingControlKeepsRecordingMetricsLive,
     controlTimeoutAdaptsToRefreshedConfirmationBudget,initialNoSampleDoesNotAppendPreviousDataLabel,
-    nonJsonErrorResponseShowsFallbackMessage]) {
+    nonJsonErrorResponseShowsFallbackMessage,disabledSizeAlertDoesNotTurnProgressBarRed]) {
     try {await test();console.log('PASS',test.name);} catch(error){failed++;console.error('FAIL',test.name,error.message);}
   }
   if(failed) process.exitCode=1;
