@@ -3,6 +3,10 @@
 
   <h1>OBS Monitor</h1>
 
+  <p>
+    <strong>简体中文</strong> · <a href="README_EN.md">English</a>
+  </p>
+
   <p><strong>轻量、可靠的 OBS Studio 桌面录制控制台与局域网手机遥控器</strong></p>
   <p>实时掌握录制时长与真实输出字节数，手机扫码即可随手开始、暂停、继续或结束录制。</p>
 
