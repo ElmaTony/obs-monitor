@@ -33,25 +33,40 @@ class OBSWebSocketClient:
         secret = base64.b64encode(hashlib.sha256((password + salt).encode()).digest()).decode()
         return base64.b64encode(hashlib.sha256((secret + challenge).encode()).digest()).decode()
 
+    def _recv_json(self):
+        raw = self.ws.recv()
+        if raw is None or raw == "" or raw == b"":
+            raise ConnectionError("OBS 连接已断开")
+        try:
+            message = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ConnectionError("OBS 返回了无法解析的消息") from exc
+        if not isinstance(message, dict):
+            raise ConnectionError("OBS 返回了无效的消息格式")
+        return message
+
     def connect(self):
         self.close()
         host = f"[{self.host}]" if ":" in self.host and not self.host.startswith("[") else self.host
         self.ws = self.socket_factory(f"ws://{host}:{self.port}", timeout=self.timeout, suppress_origin=True)
         try:
-            hello = json.loads(self.ws.recv())
+            hello = self._recv_json()
             if hello.get("op") != 0:
                 raise RuntimeError("OBS 握手失败")
             data = {"rpcVersion": 1, "eventSubscriptions": 0}
-            auth = hello.get("d", {}).get("authentication")
+            hello_data = hello.get("d") if isinstance(hello.get("d"), dict) else {}
+            auth = hello_data.get("authentication")
             if auth:
+                if not isinstance(auth, dict) or "salt" not in auth or "challenge" not in auth:
+                    raise RuntimeError("OBS 认证握手数据无效")
                 if not self.password:
                     raise OBSRequestError("请在连接设置中填写 OBS WebSocket 密码")
                 data["authentication"] = self.build_authentication(self.password, auth["salt"], auth["challenge"])
             self.ws.send(json.dumps({"op": 1, "d": data}))
-            identified = json.loads(self.ws.recv())
+            identified = self._recv_json()
             if identified.get("op") != 2:
                 raise OBSRequestError("OBS 认证失败，请检查密码")
-            return hello.get("d", {})
+            return hello_data
         except Exception:
             self.close()
             raise
@@ -66,18 +81,19 @@ class OBSWebSocketClient:
         self.ws.send(json.dumps({"op": 6, "d": data}))
         deadline = time.monotonic() + self.timeout
         while time.monotonic() < deadline:
-            message = json.loads(self.ws.recv())
+            message = self._recv_json()
             if message.get("op") == 5:
                 continue
-            data = message.get("d", {})
-            if message.get("op") != 7 or data.get("requestId") != request_id:
+            payload = message.get("d")
+            if message.get("op") != 7 or not isinstance(payload, dict) or payload.get("requestId") != request_id:
                 continue
             # The official protocol uses requestStatus, never responseStatus.
-            status = data.get("requestStatus", {})
+            status = payload.get("requestStatus")
+            status = status if isinstance(status, dict) else {}
             if not status.get("result"):
                 comment = status.get("comment") or f"请求失败（{status.get('code', '未知错误')}）"
                 raise OBSRequestError(comment)
-            response = data.get("responseData")
+            response = payload.get("responseData")
             return {} if response is None else response
         raise TimeoutError("OBS 响应超时")
 
@@ -209,6 +225,9 @@ class OBSController:
             self._reconnect.set()
             self._state.update(connected=False, message="正在重新连接 OBS…")
             self._fail_pending("OBS 连接正在重置，请确认当前状态后重试")
+            client = None if self._state["busy"] else self._client
+        if client:
+            client.close()
         self._wake.set()
 
     def submit(self, action):
@@ -277,6 +296,7 @@ class OBSController:
     def apply_connection_config(self, candidate):
         # Settings dialogs and phone sound updates share a transaction. A sound
         # toggle received while a dialog is open must not be lost when it saves.
+        old_client = None
         with self._lock:
             candidate.sound_enabled = self.config.sound_enabled
             candidate.sound_actions = dict(self.config.sound_actions)
@@ -297,8 +317,11 @@ class OBSController:
                     self._alerted = False
                     self._state.update(active=False, paused=False, bytes=0, duration_ms=0, last_file="")
                 self._fail_pending("OBS 连接设置已更改，旧操作已取消，请确认新连接的状态")
+                old_client = self._client
                 self._wake.set()
-            return previous
+        if old_client:
+            old_client.close()
+        return previous
 
     def _observe(self, data, notify=True):
         current = {"active": bool(data.get("outputActive")), "paused": bool(data.get("outputPaused")),
@@ -358,10 +381,10 @@ class OBSController:
             frame_interval = self._client.get_frame_interval()
             with self._lock:
                 self._settle_seconds = max(0.2, 3 * frame_interval)
-                # OBS NVENC can queue up to 64 frames. Fractional frame rates
-                # can therefore take much longer to drain than to pause/resume.
-                # Keep a finite, frame-aware stop budget and never replay StopRecord.
-                self._drain_seconds = 64 * frame_interval if action == "stop" else 0.0
+                # OBS NVENC can queue up to 64 frames when stopping. For other
+                # transitions, fractional frame rates still need at least two
+                # frame intervals before the output flag flips.
+                self._drain_seconds = (64 if action == "stop" else 2) * frame_interval
             if self._stop.is_set() or self._reconnect.is_set():
                 raise OBSRequestError("软件已关闭或 OBS 连接已重置，操作未执行")
             request_sent = True
@@ -420,7 +443,7 @@ class OBSController:
                 self._state["busy"] = False
             if request_sent:
                 future.set_exception(ConnectionError("连接中断，操作结果未知；请查看 OBS 状态后再操作"))
-            elif isinstance(exc, ValueError):
+            elif isinstance(exc, ValueError) and not isinstance(exc, json.JSONDecodeError):
                 future.set_exception(OBSRequestError(str(exc)))
             else:
                 future.set_exception(ConnectionError("OBS 连接中断，操作未执行"))

@@ -252,6 +252,31 @@ async function disabledSizeAlertDoesNotTurnProgressBarRed() {
   assert.notEqual(h.ids.fill.style.background,'var(--red)');
 }
 
+async function networkFailureDuringControlAndSoundShowsLocalizedToast() {
+  const h=harness();await h.initial();
+  const click=h.button('pause').listeners.click();
+  const command=h.pending('/api/control');command.done=true;
+  command.reject(new TypeError('Failed to fetch'));await click;
+  assert.ok(h.ids.toast.textContent.includes('无法连接电脑'));
+  assert.ok(!h.ids.toast.textContent.includes('Failed to fetch'));
+  h.ids.sound.checked=false;
+  const change=h.ids.sound.listeners.change();
+  const sound=h.pending('/api/sound');sound.done=true;
+  sound.reject(new TypeError('Load failed'));await change;
+  assert.ok(h.ids.toast.textContent.includes('无法连接电脑'));
+  assert.ok(!h.ids.toast.textContent.includes('Load failed'));
+}
+
+async function stoppedRecordingUpdatesClockLabelAndThresholdFormatting() {
+  const h=harness();
+  await h.respond(h.pending('/api/status'),state(1,false,{active:false,bytes:500000,threshold_bytes:Math.floor(0.3*1073741824),allowed:{start:true,pause:false,resume:false,stop:false}}));
+  assert.equal(h.ids.clockLabel.textContent,'上次录制时长');
+  assert.equal(h.ids.limit.textContent,'提醒于 0.3 GB');
+  await h.advance(800);
+  await h.respond(h.pending('/api/status'),state(2,false,{active:true,bytes:1024,threshold_bytes:Math.floor(2.0*1073741824)}));
+  assert.equal(h.ids.clockLabel.textContent,'录制时长');
+}
+
 module.exports = {harness, state, flush};
 if (require.main === module) (async()=>{
   let failed=0;
@@ -261,7 +286,8 @@ if (require.main === module) (async()=>{
     duplicateTapDoesNotSendDuplicateCommand,failedSoundSaveRestoresServerState,timedOutPollRecoversAndMatchesVisualAvailability,
     slowControlUsesTheDesktopConfirmationBudget,pendingControlKeepsRecordingMetricsLive,
     controlTimeoutAdaptsToRefreshedConfirmationBudget,initialNoSampleDoesNotAppendPreviousDataLabel,
-    nonJsonErrorResponseShowsFallbackMessage,disabledSizeAlertDoesNotTurnProgressBarRed]) {
+    nonJsonErrorResponseShowsFallbackMessage,disabledSizeAlertDoesNotTurnProgressBarRed,
+    networkFailureDuringControlAndSoundShowsLocalizedToast,stoppedRecordingUpdatesClockLabelAndThresholdFormatting]) {
     try {await test();console.log('PASS',test.name);} catch(error){failed++;console.error('FAIL',test.name,error.message);}
   }
   if(failed) process.exitCode=1;

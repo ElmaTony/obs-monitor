@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import json
 import math
+import os
+from pathlib import Path
+import tempfile
 import threading
 from dataclasses import asdict, dataclass, field
 
@@ -9,6 +12,7 @@ from platform_support import APP_DIR, WindowsCredentialStore, detect_obs_websock
 
 CONFIG_PATH = APP_DIR / "config.json"
 ACTIONS = {"start": "开始录制", "stop": "结束录制", "pause": "暂停录制", "resume": "继续录制"}
+LOCAL_OBS_HOSTS = {"127.0.0.1", "localhost", "::1", "[::1]"}
 _save_lock = threading.Lock()
 
 
@@ -30,10 +34,10 @@ class AppConfig:
     def load(cls):
         host, port, detected_password = detect_obs_websocket_settings()
         try:
-            password = WindowsCredentialStore().read() or detected_password
+            stored_password = WindowsCredentialStore().read()
         except (OSError, ValueError):
-            password = detected_password
-        result = cls(obs_host=host, obs_port=port, obs_password=password)
+            stored_password = ""
+        result = cls(obs_host=host, obs_port=port, obs_password=stored_password or detected_password)
         try:
             raw = json.loads(CONFIG_PATH.read_text(encoding="utf-8-sig"))
         except (OSError, ValueError):
@@ -44,6 +48,8 @@ class AppConfig:
             result.theme = raw["theme"]
         if isinstance(raw.get("obs_host"), str):
             result.obs_host = raw["obs_host"].strip() or host
+        if not stored_password and result.obs_host.casefold() not in LOCAL_OBS_HOSTS:
+            result.obs_password = ""
         for key in ("obs_port", "remote_port"):
             raw_value = raw.get(key, getattr(result, key))
             if isinstance(raw_value, bool):
@@ -87,7 +93,9 @@ class AppConfig:
             except (OSError, ValueError):
                 pass
             CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-            temporary = CONFIG_PATH.with_suffix(".tmp")
+            handle, filename = tempfile.mkstemp(prefix=".config-", suffix=".tmp", dir=CONFIG_PATH.parent)
+            os.close(handle)
+            temporary = Path(filename)
             credential_store = WindowsCredentialStore() if save_password else None
             previous_password = credential_store.read() if credential_store else None
             credential_written = False

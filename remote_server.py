@@ -4,6 +4,7 @@ import hmac
 import ipaddress
 import json
 import socket
+import sys
 import threading
 import time
 from concurrent.futures import TimeoutError as FutureTimeout
@@ -21,6 +22,10 @@ PAIRING_MAX_AGE = 365 * 24 * 60 * 60
 
 class RemoteStoppedError(RuntimeError):
     pass
+
+
+class _RemoteHTTPServer(ThreadingHTTPServer):
+    allow_reuse_address = sys.platform != "win32"
 
 
 def lan_addresses():
@@ -121,7 +126,7 @@ class RemoteServer:
                     self.send_payload(503, {"ok": False, "message": "手机遥控已关闭"})
                     return False
                 origin = self.headers.get("Origin")
-                if origin and origin != "http://" + self.headers.get("Host", ""):
+                if origin and origin.casefold() != ("http://" + self.headers.get("Host", "")).casefold():
                     self.send_payload(403, {"ok": False, "message": "请求来源无效"})
                     return False
                 provided = self.headers.get("X-OBS-Token", "")
@@ -201,6 +206,9 @@ class RemoteServer:
                                 else:
                                     self.send_payload(200, result)
                                 break
+                            if not owner._accepting.is_set():
+                                self.send_payload(503, {"ok": False, "message": "手机遥控已关闭，请在电脑端确认操作状态"})
+                                break
                             # The controller refreshes the frame rate after dispatch.
                             # Extend the wait if that changes its confirmation budget.
                             if time.monotonic() - started < owner.controller.control_timeout:
@@ -243,7 +251,7 @@ class RemoteServer:
                     self.send_payload(503, {"ok": False, "message": str(exc)})
                 return False, None
 
-        self.server = ThreadingHTTPServer((self.host, self.port), Handler)
+        self.server = _RemoteHTTPServer((self.host, self.port), Handler)
         self.server.daemon_threads = True
         self.port = self.server.server_address[1]
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True, name="phone-remote")

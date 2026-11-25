@@ -141,7 +141,7 @@
     </div>
     <div class="clock-wrap">
       <div id="clock" class="clock">00:00:00</div>
-      <div class="clock-label">录制时长</div>
+      <div id="clockLabel" class="clock-label">录制时长</div>
     </div>
     <div class="metric-card">
       <div class="size-row">
@@ -221,7 +221,7 @@
   }
   // Keep a supplied fragment in browser history/bookmarks, including when storage
   // is blocked. It is never transmitted as part of the HTTP URL.
-  let current = null, acceptedRevision = -1, acceptedInstance = '', receivedAt = 0, receivedWallAt = 0;
+  let current = null, acceptedRevision = -1, acceptedInstance = '', receivedAt = 0, receivedWallAt = 0, lastLive = null;
   const retiredInstances = new Set();
   let pendingControl = false, soundBusy = false, pairingBusy = false, stopped = false, toastTimer;
   let pollTimer, statusFlight = null, statusGeneration = 0, pollFailures = 0;
@@ -300,21 +300,28 @@
       current?.busy ? '电脑正在处理操作…' : expired() ? '等待最新状态' : '与电脑状态同步';
     $('forget').disabled = !current || pendingControl || soundBusy || pairingBusy;
   }
+  function formatActionError(error, fallback) {
+    if (error.name === 'AbortError') return '操作结果尚未确认，正在更新当前状态。';
+    if (error.status) return error.message || fallback;
+    return fallback;
+  }
   function updateView() {
-    if (!current) {enableButtons(); return;}
+    if (!current) {lastLive = false; enableButtons(); return;}
     $('pairing').hidden = true;
     $('retry').hidden = true;
     $('pairingStatus').textContent = '已配对 · 下次访问自动连接';
     const live = !expired();
+    lastLive = live;
     $('connection').classList.toggle('online', live);
     $('connection').lastElementChild.textContent = live ? 'OBS 已连接' : current.connected ? '数据已过期' : 'OBS 未连接';
     $('state').textContent = live ? current.state_text : current.connected ? '数据已过期' : '未连接';
     $('clock').textContent = current.duration_text;
+    $('clockLabel').textContent = !current.active && current.bytes > 0 ? '上次录制时长' : '录制时长';
     $('size').textContent = current.size_text;
     $('exactSize').textContent = current.size_exact_text + (live || current.data_age_ms === null ? '' : ' · 上次有效数据');
     $('hero').classList.toggle('live', live && current.active && !current.paused);
     $('hero').classList.toggle('paused', live && current.paused);
-    const gb = current.threshold_bytes / 1073741824;
+    const gb = Number((current.threshold_bytes / 1073741824).toFixed(1));
     $('limit').textContent = current.alert_enabled ? `提醒于 ${gb.toLocaleString()} GB` : '大小提醒已关闭';
     const percent = current.alert_enabled ? Math.min(100, current.bytes / Math.max(1, current.threshold_bytes) * 100) : 0;
     $('fill').style.width = percent + '%';
@@ -346,6 +353,7 @@
   }
   function offline(message) {
     current = null;
+    lastLive = false;
     $('connection').classList.remove('online');
     $('connection').lastElementChild.textContent = '连接已断开';
     $('state').textContent = '状态已过期';
@@ -422,8 +430,8 @@
       toast(result.message);
     } catch (error) {
       if (error.obsolete) return;
-      if (error.status === 401) requirePairing(error.message);
-      toast(error.name === 'AbortError' ? '操作结果尚未确认，正在更新当前状态。' : error.message);
+      if (error.status === 401) {requirePairing(error.message); return;}
+      toast(formatActionError(error, '无法连接电脑，操作状态未知，正在重新确认。'));
     } finally {
       if (controlFlight === flight) {
         controlFlight = null;
@@ -447,8 +455,8 @@
       toast(enabled ? '电脑提示音已开启' : '电脑提示音已关闭');
     } catch (error) {
       if (error.obsolete) return;
-      if (error.status === 401) requirePairing(error.message);
-      toast(error.message);
+      if (error.status === 401) {requirePairing(error.message); return;}
+      toast(formatActionError(error, '无法连接电脑，提示音设置未保存。'));
     } finally {
       if (soundFlight === flight) {
         soundFlight = null;
@@ -514,7 +522,7 @@
       }
     }
   });
-  setInterval(() => {if (current && !document.hidden) updateView();}, 500);
+  setInterval(() => {if (current && !document.hidden && lastLive !== !expired()) updateView();}, 500);
   // A persistent HttpOnly cookie can restore pairing even with no URL fragment
   // or readable browser storage. Only the server decides whether to ask to pair.
   void poll();

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 import queue
 import sys
 import threading
@@ -14,12 +15,12 @@ from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QImage, QPainter, 
 from PySide6.QtWidgets import (
     QAbstractItemView, QAbstractSpinBox, QApplication, QCheckBox, QComboBox, QDialog,
     QDoubleSpinBox, QFormLayout, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget,
-    QListWidgetItem, QMainWindow, QMessageBox, QProgressBar, QPushButton, QSizePolicy,
-    QSpinBox, QStyledItemDelegate, QToolButton, QVBoxLayout, QWidget,
+    QListWidgetItem, QMainWindow, QMessageBox, QProgressBar, QPushButton, QScrollArea,
+    QSizePolicy, QSpinBox, QStyledItemDelegate, QToolButton, QVBoxLayout, QWidget,
 )
 
 from instance_guard import SingleInstance
-from obs_controller import LABELS, OBSController, format_size
+from obs_controller import LABELS, OBSController, OBSRequestError, format_size
 from pairing import PairingIdentity
 from platform_support import AudioPlayer, animations_enabled, set_title_bar_theme
 from remote_server import RemoteServer, lan_addresses
@@ -82,6 +83,21 @@ PALETTES = {
         qr_fg="#161514",
     ),
 }
+
+
+def _validate_obs_host(raw_host):
+    address = raw_host.strip() or "127.0.0.1"
+    if any(ord(c) < 32 or c.isspace() or c in "/?#@\\" for c in address):
+        raise ValueError("OBS 地址请只填写 IP 或主机名")
+    if "[" in address or "]" in address or ":" in address:
+        candidate = address[1:-1] if address.startswith("[") and address.endswith("]") else address
+        if "[" in candidate or "]" in candidate:
+            raise ValueError("OBS 地址请只填写 IP 或主机名，端口请在下方单独填写")
+        try:
+            ipaddress.IPv6Address(candidate)
+        except ValueError as exc:
+            raise ValueError("OBS 地址请只填写 IP 或主机名，端口请在下方单独填写") from exc
+    return address
 
 
 def text(value, role="body"):
@@ -290,20 +306,18 @@ class ActivityDelegate(QStyledItemDelegate):
         super().__init__(parent)
         self.owner = owner
         self.multiline = multiline
-
-    def _fonts(self):
-        return QFont("Consolas", 9), QFont("Microsoft YaHei UI", 9)
+        self._time_font = QFont("Consolas", 9)
+        self._body_font = QFont("Microsoft YaHei UI", 9)
+        self._body_metrics = QFontMetrics(self._body_font)
 
     def sizeHint(self, option, index):
         if not self.multiline:
             return QSize(option.rect.width(), 25)
-        _, body_font = self._fonts()
-        metrics = QFontMetrics(body_font)
         view_width = option.rect.width()
         if view_width <= 0 and self.parent():
             view_width = self.parent().viewport().width()
         text_width = max(160, view_width - 96)
-        bounds = metrics.boundingRect(
+        bounds = self._body_metrics.boundingRect(
             QRect(0, 0, text_width, 2000),
             Qt.TextFlag.TextWordWrap,
             index.data(self.ROLE_MESSAGE) or "",
@@ -333,25 +347,24 @@ class ActivityDelegate(QStyledItemDelegate):
             painter.setBrush(QColor(p["surface_alt"]))
             painter.drawRoundedRect(QRectF(row_rect), 6, 6)
 
-        time_font, body_font = self._fonts()
         dot_y = row_rect.top() + (14 if self.multiline else row_rect.height() / 2)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor(dot_color))
         painter.drawEllipse(QRectF(row_rect.left() + 7, dot_y - 3, 6, 6))
 
-        painter.setFont(time_font)
+        painter.setFont(self._time_font)
         painter.setPen(QColor(p["muted"]))
         time_rect = QRect(row_rect.left() + 20, row_rect.top() + (5 if self.multiline else 0), 58, 18 if self.multiline else row_rect.height())
         painter.drawText(time_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, stamp)
 
-        painter.setFont(body_font)
+        painter.setFont(self._body_font)
         text_color = p["red"] if level == "red" else p["amber"] if level == "amber" else p["text_secondary"]
         painter.setPen(QColor(text_color))
         msg_rect = QRect(row_rect.left() + 82, row_rect.top() + (5 if self.multiline else 0), max(20, row_rect.width() - 90), row_rect.height() - (10 if self.multiline else 0))
         if self.multiline:
             painter.drawText(msg_rect, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft | Qt.TextFlag.TextWordWrap, message)
         else:
-            elided = QFontMetrics(body_font).elidedText(message, Qt.TextElideMode.ElideRight, msg_rect.width())
+            elided = self._body_metrics.elidedText(message, Qt.TextElideMode.ElideRight, msg_rect.width())
             painter.drawText(msg_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, elided)
         painter.restore()
 
@@ -427,6 +440,9 @@ class MonitorApp(QMainWindow):
         self._theme_overlays = []
         self._title_colors = None
         self._style_cache = {}
+        self._copy_link_timer = QTimer(self)
+        self._copy_link_timer.setSingleShot(True)
+        self._copy_link_timer.timeout.connect(lambda: self.copy_button.setText("复制链接"))
         self.setWindowTitle("OBS Monitor · 录制工作台")
         self.setWindowIcon(icon("logo", "#d95a36"))
         self.setWindowFlags(
@@ -764,6 +780,11 @@ class MonitorApp(QMainWindow):
             self._style_cache[key] = stylesheet
             widget.setStyleSheet(stylesheet)
 
+    @staticmethod
+    def _set_label_text(label, value):
+        if label.text() != value:
+            label.setText(value)
+
     def _update_copy_icon(self):
         p = getattr(self, "palette_values", PALETTES["light"])
         color = p["primary"] if self.copy_button.isEnabled() else p["disabled"]
@@ -1059,6 +1080,9 @@ QToolTip {{background:{p['surface']};color:{p['text']};border:1px solid {p['line
         copy_all = self._activity_dialog_copy = QPushButton("复制全部")
         copy_all.setProperty("kind", "outline")
         copy_all.setFixedHeight(30)
+        copy_timer = QTimer(copy_all)
+        copy_timer.setSingleShot(True)
+        copy_timer.timeout.connect(lambda: copy_all.setText("复制全部"))
 
         def copy_entries():
             if not self.activity_entries:
@@ -1066,7 +1090,7 @@ QToolTip {{background:{p['surface']};color:{p['text']};border:1px solid {p['line
             lines = [f"{stamp}  {msg}" for stamp, _, msg in self.activity_entries]
             QApplication.clipboard().setText("\n".join(lines))
             copy_all.setText("已复制")
-            QTimer.singleShot(1500, copy_all, lambda: copy_all.setText("复制全部"))
+            copy_timer.start(1500)
 
         copy_all.clicked.connect(copy_entries)
         top.addWidget(copy_all)
@@ -1121,12 +1145,14 @@ QToolTip {{background:{p['surface']};color:{p['text']};border:1px solid {p['line
                 self._busy = False
                 try:
                     payload.result()
+                except OBSRequestError:
+                    pass  # Already logged via controller error event.
                 except Exception as exc:
                     self._log("操作未完成：" + str(exc), level="red")
         state = self.controller.snapshot()
         p = self.palette_values
         live = state["connected"] and not state["stale"]
-        self.connection_label.setText("●  OBS 已连接" if live else "●  数据已过期" if state["connected"] else "●  OBS 未连接")
+        self._set_label_text(self.connection_label, "●  OBS 已连接" if live else "●  数据已过期" if state["connected"] else "●  OBS 未连接")
         self._set_cached_style(
             "connection",
             self.connection_label,
@@ -1135,7 +1161,7 @@ QToolTip {{background:{p['surface']};color:{p['text']};border:1px solid {p['line
             "padding:3px 10px;border-radius:11px;font-weight:600;",
         )
         mode = "amber" if state["paused"] and live else "red" if state["active"] and live else "accent" if live else None
-        self.state_label.setText("●  " + state["state_text"])
+        self._set_label_text(self.state_label, "●  " + state["state_text"])
         self._set_cached_style(
             "state",
             self.state_label,
@@ -1143,17 +1169,20 @@ QToolTip {{background:{p['surface']};color:{p['text']};border:1px solid {p['line
             f"background:{p[mode + '_bg'] if mode else p['subtle']};"
             "padding:3px 10px;border-radius:11px;font-weight:600;",
         )
-        self.clock_label.setText(state["duration_text"])
-        self.clock_caption.setText("上次录制时长" if not state["active"] and state["bytes"] else "录制时长")
-        self.size_label.setText(state["size_text"])
-        self.threshold_label.setText(
-            f"提醒于 {self.config.threshold_gb:g} GB · 每次一次" if self.config.alert_enabled else "大小提醒已关闭"
+        self._set_label_text(self.clock_label, state["duration_text"])
+        self._set_label_text(self.clock_caption, "上次录制时长" if not state["active"] and state["bytes"] else "录制时长")
+        self._set_label_text(self.size_label, state["size_text"])
+        self._set_label_text(
+            self.threshold_label,
+            f"提醒于 {self.config.threshold_gb:g} GB · 每次一次" if self.config.alert_enabled else "大小提醒已关闭",
         )
-        self.size_exact_label.setText(
-            state["size_exact_text"] + (" · 上次数据" if state["stale"] and state["data_age_ms"] is not None else "")
+        self._set_label_text(
+            self.size_exact_label,
+            state["size_exact_text"] + (" · 上次数据" if state["stale"] and state["data_age_ms"] is not None else ""),
         )
         ratio = min(1000, int(state["bytes"] / max(1, state["threshold_bytes"]) * 1000)) if self.config.alert_enabled else 0
-        self.progress.setValue(ratio)
+        if self.progress.value() != ratio:
+            self.progress.setValue(ratio)
         chunk_color = p["red"] if self.config.alert_enabled and ratio >= 1000 else (p[mode] if mode else p["disabled"])
         self._set_cached_style(
             "progress",
@@ -1161,15 +1190,18 @@ QToolTip {{background:{p['surface']};color:{p['text']};border:1px solid {p['line
             f"QProgressBar{{background:{p['subtle']};border:0;border-radius:2px;}}"
             f"QProgressBar::chunk{{background:{chunk_color};border-radius:2px;}}",
         )
-        self.limit_label.setText(
+        self._set_label_text(
+            self.limit_label,
             "数据已过期，等待重新连接 OBS" if state["stale"]
             else "本次录制已触发大小提醒" if state["alerted"]
-            else "OBS 累计输出量 · 不依赖目录显示大小"
+            else "OBS 累计输出量 · 不依赖目录显示大小",
         )
-        self.sound_switch.blockSignals(True)
-        self.sound_switch.setChecked(state["sound_enabled"])
-        self.sound_switch.blockSignals(False)
-        self.sound_muted_label.setVisible(not state["sound_enabled"])
+        if self.sound_switch.isChecked() != state["sound_enabled"]:
+            self.sound_switch.blockSignals(True)
+            self.sound_switch.setChecked(state["sound_enabled"])
+            self.sound_switch.blockSignals(False)
+        if self.sound_muted_label.isVisible() == state["sound_enabled"]:
+            self.sound_muted_label.setVisible(not state["sound_enabled"])
         for item in self.sound_vars.values():
             item.set_dimmed(not state["sound_enabled"])
         for action, b in self.action_buttons.items():
@@ -1184,8 +1216,8 @@ QToolTip {{background:{p['surface']};color:{p['text']};border:1px solid {p['line
                     else p["accent"]
                 )
                 b.setIcon(icon(action, color))
-        self.command_label.setText("正在等待 OBS 确认…" if self._busy or state["busy"] else "OBS 确认后生效")
-        self.status_bar.setText(state["message"] or ("●  已连接，手机与电脑状态同步" if self.remote else "●  已连接，手机遥控未开启"))
+        self._set_label_text(self.command_label, "正在等待 OBS 确认…" if self._busy or state["busy"] else "OBS 确认后生效")
+        self._set_label_text(self.status_bar, state["message"] or ("●  已连接，手机与电脑状态同步" if self.remote else "●  已连接，手机遥控未开启"))
 
     def _preview(self, action, log=True):
         if self.player:
@@ -1279,19 +1311,24 @@ QToolTip {{background:{p['surface']};color:{p['text']};border:1px solid {p['line
 
     def _sync_remote_ui(self, error="手机遥控已关闭", discover=True):
         selected = self.address_combo.currentData()
+        port = self.remote.port if self.remote else self.config.remote_port
         previous_block = self.address_combo.blockSignals(True)
         try:
             self.address_combo.clear()
-            for address in self._known_addresses:
-                self.address_combo.addItem(f"{address}:{self.config.remote_port}", address)
-            if not self._known_addresses:
+            if not self.remote:
+                self.address_combo.addItem("手机遥控已关闭", None)
+            elif self._known_addresses:
+                for address in self._known_addresses:
+                    self.address_combo.addItem(f"{address}:{port}", address)
+            else:
                 self.address_combo.addItem("等待局域网地址…", None)
-            if self._address_manually_selected and selected in self._known_addresses:
+            if self.remote and self._address_manually_selected and selected in self._known_addresses:
                 self.address_combo.setCurrentIndex(self.address_combo.findData(selected))
             elif selected not in self._known_addresses:
                 self._address_manually_selected = False
         finally:
             self.address_combo.blockSignals(previous_block)
+        self.address_combo.setEnabled(self.remote is not None and bool(self._known_addresses))
         if self.remote and self._known_addresses:
             self.mobile_status.setText("已开启")
             self._refresh_qr()
@@ -1355,7 +1392,7 @@ QToolTip {{background:{p['surface']};color:{p['text']};border:1px solid {p['line
             QApplication.clipboard().setText(self.remote.url(self.address_combo.currentData()))
             self._log("手机控制链接已复制，发送到自己的手机即可打开。", level="info")
             self.copy_button.setText("已复制")
-            QTimer.singleShot(1500, self, lambda: self.copy_button.setText("复制链接"))
+            self._copy_link_timer.start(1500)
 
     def open_remote(self):
         if self.remote:
@@ -1364,8 +1401,9 @@ QToolTip {{background:{p['surface']};color:{p['text']};border:1px solid {p['line
     def reset_phone_pairing(self):
         if not self.remote:
             return
+        parent = self.settings_window if (self.settings_window and self.settings_window.isVisible()) else self
         answer = QMessageBox.question(
-            self,
+            parent,
             "重置手机配对",
             "重置后，所有旧链接和已配对手机将失效，需要使用新链接重新连接。录制会继续。",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
@@ -1376,7 +1414,7 @@ QToolTip {{background:{p['surface']};color:{p['text']};border:1px solid {p['line
         try:
             self.remote.reset_pairing()
         except OSError as exc:
-            QMessageBox.warning(self, "配对未重置", str(exc))
+            QMessageBox.warning(parent, "配对未重置", str(exc))
             return
         self._refresh_qr()
         self._log("手机配对已重置，旧链接失效；请使用新链接或二维码连接。", level="amber")
@@ -1393,7 +1431,12 @@ QToolTip {{background:{p['surface']};color:{p['text']};border:1px solid {p['line
             | Qt.WindowType.WindowTitleHint
             | Qt.WindowType.WindowCloseButtonHint
         )
-        dialog.setFixedSize(468, 548)
+        screen = QApplication.primaryScreen()
+        available = screen.availableGeometry() if screen else None
+        dialog_height = 548
+        if available is not None and available.height() > 0:
+            dialog_height = min(548, max(420, available.height() - 48))
+        dialog.setFixedSize(468, dialog_height)
         dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
 
         def closed():
@@ -1414,6 +1457,16 @@ QToolTip {{background:{p['surface']};color:{p['text']};border:1px solid {p['line
         head.addWidget(hint)
         layout.addLayout(head)
 
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setStyleSheet("QScrollArea, QScrollArea > QWidget > QWidget {background:transparent;border:0;}")
+        scroll_content = QWidget()
+        scroll_layout = QVBoxLayout(scroll_content)
+        scroll_layout.setContentsMargins(0, 0, 0, 0)
+        scroll_layout.setSpacing(12)
+
         obs_card, obs_layout = card((16, 14, 16, 14), 10)
         obs_layout.addWidget(text("OBS WebSocket 连接", "section"))
         obs_form = QFormLayout()
@@ -1431,7 +1484,7 @@ QToolTip {{background:{p['surface']};color:{p['text']};border:1px solid {p['line
             field.setMinimumHeight(34)
             obs_form.addRow(title, field)
         obs_layout.addLayout(obs_form)
-        layout.addWidget(obs_card)
+        scroll_layout.addWidget(obs_card)
 
         remote_card, remote_layout = card((16, 14, 16, 14), 10)
         remote_layout.addWidget(text("手机遥控与大小提醒", "section"))
@@ -1459,9 +1512,10 @@ QToolTip {{background:{p['surface']};color:{p['text']};border:1px solid {p['line
         alert_enabled.setChecked(self.config.alert_enabled)
         remote_layout.addWidget(remote_enabled)
         remote_layout.addWidget(alert_enabled)
-        layout.addWidget(remote_card)
-
-        layout.addStretch()
+        scroll_layout.addWidget(remote_card)
+        scroll_layout.addStretch()
+        scroll.setWidget(scroll_content)
+        layout.addWidget(scroll, 1)
 
         reset_pairing = QPushButton("重置所有手机配对")
         reset_pairing.setProperty("kind", "outline")
@@ -1478,11 +1532,7 @@ QToolTip {{background:{p['surface']};color:{p['text']};border:1px solid {p['line
 
         def apply():
             try:
-                address = host.text().strip() or "127.0.0.1"
-                if any(c in address for c in "/?#@\\") or any(c.isspace() for c in address):
-                    raise ValueError("OBS 地址请只填写 IP 或主机名")
-                if address.count(":") == 1:
-                    raise ValueError("OBS 地址请只填写 IP 或主机名，端口请在下方单独填写")
+                address = _validate_obs_host(host.text())
                 if port.value() == remote_port.value() and remote_enabled.isChecked():
                     raise ValueError("手机端口不能与 OBS WebSocket 端口相同")
                 candidate = AppConfig(
@@ -1549,6 +1599,7 @@ QToolTip {{background:{p['surface']};color:{p['text']};border:1px solid {p['line
             self.closed = True
             self.timer.stop()
             self.network_timer.stop()
+            self._copy_link_timer.stop()
             for dialog in self.findChildren(QDialog):
                 dialog.close()
             if self.remote:
@@ -1570,8 +1621,6 @@ def main():
     if not instance.claim():
         return
     window = MonitorApp()
-    available = application.primaryScreen().availableGeometry()
-    window._apply_fixed_window_size(available)
 
     def activate():
         if window.isMinimized():

@@ -76,52 +76,63 @@ def detect_obs_websocket_settings() -> tuple[str, int, str]:
                     port = parsed
             except (TypeError, ValueError, OverflowError):
                 pass
-        password = raw.get("server_password", raw.get("password", ""))
+        if raw.get("auth_required") is False:
+            password = ""
+        else:
+            password = raw.get("server_password", raw.get("password", ""))
         return "127.0.0.1", port, str(password or "")
     return "127.0.0.1", 4455, ""
+
+
+class _CREDENTIALW(ctypes.Structure):
+    _fields_ = [
+        ("Flags", wintypes.DWORD),
+        ("Type", wintypes.DWORD),
+        ("TargetName", wintypes.LPWSTR),
+        ("Comment", wintypes.LPWSTR),
+        ("LastWritten", wintypes.FILETIME),
+        ("CredentialBlobSize", wintypes.DWORD),
+        ("CredentialBlob", ctypes.POINTER(ctypes.c_byte)),
+        ("Persist", wintypes.DWORD),
+        ("AttributeCount", wintypes.DWORD),
+        ("Attributes", ctypes.c_void_p),
+        ("TargetAlias", wintypes.LPWSTR),
+        ("UserName", wintypes.LPWSTR),
+    ]
+
+
+@lru_cache(maxsize=1)
+def _advapi32():
+    dll = ctypes.WinDLL("advapi32", use_last_error=True)
+    dll.CredReadW.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.POINTER(ctypes.POINTER(_CREDENTIALW)),
+    ]
+    dll.CredWriteW.argtypes = [
+        ctypes.POINTER(_CREDENTIALW),
+        wintypes.DWORD,
+    ]
+    dll.CredDeleteW.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+    ]
+    dll.CredFree.argtypes = [ctypes.c_void_p]
+    dll.CredFree.restype = None
+    return dll
 
 
 class WindowsCredentialStore:
     TARGET = "OBSAudioMonitor/OBSWebSocket"
     CRED_TYPE_GENERIC = 1
     CRED_PERSIST_LOCAL_MACHINE = 2
-
-    class CREDENTIALW(ctypes.Structure):
-        _fields_ = [
-            ("Flags", wintypes.DWORD),
-            ("Type", wintypes.DWORD),
-            ("TargetName", wintypes.LPWSTR),
-            ("Comment", wintypes.LPWSTR),
-            ("LastWritten", wintypes.FILETIME),
-            ("CredentialBlobSize", wintypes.DWORD),
-            ("CredentialBlob", ctypes.POINTER(ctypes.c_byte)),
-            ("Persist", wintypes.DWORD),
-            ("AttributeCount", wintypes.DWORD),
-            ("Attributes", ctypes.c_void_p),
-            ("TargetAlias", wintypes.LPWSTR),
-            ("UserName", wintypes.LPWSTR),
-        ]
+    CREDENTIALW = _CREDENTIALW
 
     def __init__(self, target=None) -> None:
         self.TARGET = target or self.TARGET
-        self._advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
-        self._advapi32.CredReadW.argtypes = [
-            wintypes.LPCWSTR,
-            wintypes.DWORD,
-            wintypes.DWORD,
-            ctypes.POINTER(ctypes.POINTER(self.CREDENTIALW)),
-        ]
-        self._advapi32.CredWriteW.argtypes = [
-            ctypes.POINTER(self.CREDENTIALW),
-            wintypes.DWORD,
-        ]
-        self._advapi32.CredDeleteW.argtypes = [
-            wintypes.LPCWSTR,
-            wintypes.DWORD,
-            wintypes.DWORD,
-        ]
-        self._advapi32.CredFree.argtypes = [ctypes.c_void_p]
-        self._advapi32.CredFree.restype = None
+        self._advapi32 = _advapi32()
 
     def read(self) -> str:
         pointer = ctypes.POINTER(self.CREDENTIALW)()
@@ -242,7 +253,7 @@ class AudioPlayer:
 
     def play(self, name: str) -> None:
         path = SOUND_DIR / f"{name}.wav"
-        if not path.exists() and name in self.SOUND_RECIPES:
+        if name in self.SOUND_RECIPES and not self._valid_tone(path):
             SOUND_DIR.mkdir(parents=True, exist_ok=True)
             self._write_tone(path, self.SOUND_RECIPES[name])
         winsound.PlaySound(

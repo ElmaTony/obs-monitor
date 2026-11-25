@@ -124,6 +124,18 @@ class ProtocolTests(unittest.TestCase):
             worker.join(timeout=2)
         self.assertEqual(received, ["GetRecordStatus", "StartRecord", "PauseRecord", "ResumeRecord", "StopRecord"])
 
+    def test_empty_and_malformed_websocket_frames_raise_connection_error(self):
+        for payload in ("", b"", "not-json", "null", "[]"):
+            with self.subTest(payload=payload):
+                sock = MagicMock()
+                sock.recv.return_value = payload
+                client = core.OBSWebSocketClient("127.0.0.1", 4455, "", socket_factory=lambda *a, **k: sock)
+                with self.assertRaises(ConnectionError):
+                    client.connect()
+                client.ws = sock
+                with self.assertRaises(ConnectionError):
+                    client.request("GetRecordStatus")
+
 
 class FakeOBS:
     def __init__(self):
@@ -605,6 +617,49 @@ class ControllerTests(unittest.TestCase):
                 self.controller.set_sound_enabled(False)
         self.assertTrue(self.config.sound_enabled)
 
+    def test_fractional_fps_pause_waits_beyond_default_confirmation_timeout(self):
+        clock = [0.0]
+        self.fake.active = True
+        self.fake.paused = False
+        self.fake.get_frame_interval = lambda: 6.0
+        original_status = self.fake.get_record_status
+
+        def delayed_pause_status():
+            if "PauseRecord" in self.fake.requests and clock[0] < 5.5:
+                return {"outputActive": True, "outputPaused": False, "outputBytes": 1000, "outputDuration": 1000}
+            return original_status()
+
+        self.fake.get_record_status = delayed_pause_status
+        self.controller._client = self.fake
+
+        def advance(seconds):
+            clock[0] += seconds
+            return False
+
+        future = Future()
+        with patch.object(core.time, "monotonic", side_effect=lambda: clock[0]), \
+             patch.object(self.controller._stop, "wait", side_effect=advance):
+            self.controller._execute("pause", future, 0.0)
+        self.assertTrue(future.result()["ok"])
+        self.assertGreaterEqual(clock[0], 23.5)
+
+    def test_preflight_json_decode_error_reports_connection_error_not_request_error(self):
+        self.controller._client = self.fake
+        self.fake.get_record_status = MagicMock(side_effect=json.JSONDecodeError("Expecting value", "", 0))
+        future = Future()
+        with self.assertRaises(json.JSONDecodeError):
+            self.controller._execute("start", future, time.monotonic())
+        with self.assertRaisesRegex(ConnectionError, "连接中断"):
+            future.result()
+
+    def test_apply_connection_config_closes_stale_client_immediately(self):
+        stale_client = MagicMock()
+        self.controller._client = stale_client
+        candidate = settings.AppConfig(obs_host="192.168.1.99", obs_port=4455)
+        with patch.object(candidate, "save"):
+            self.controller.apply_connection_config(candidate)
+        stale_client.close.assert_called_once()
+
 
 class SettingsTests(unittest.TestCase):
     def test_default_route_is_preferred_over_virtual_adapter_addresses(self):
@@ -719,6 +774,28 @@ class SettingsTests(unittest.TestCase):
                     path.write_text(json.dumps({"server_enabled": True, "server_port": bad_port}), encoding="utf-8")
                     with patch.dict(platform_support.os.environ, {"APPDATA": temporary}):
                         self.assertEqual(platform_support.detect_obs_websocket_settings()[1], 4455)
+
+    def test_remote_obs_host_with_empty_credential_does_not_inherit_local_password(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(settings, "CONFIG_PATH", Path(tmp) / "config.json"), \
+             patch.object(settings, "detect_obs_websocket_settings", return_value=("127.0.0.1", 4455, "local-secret")), \
+             patch.object(settings, "WindowsCredentialStore") as store:
+            store.return_value.read.return_value = ""
+            settings.CONFIG_PATH.write_text(json.dumps({"obs_host": "192.168.1.50"}), encoding="utf-8")
+            self.assertEqual(settings.AppConfig.load().obs_password, "")
+            settings.CONFIG_PATH.write_text(json.dumps({"obs_host": "127.0.0.1"}), encoding="utf-8")
+            self.assertEqual(settings.AppConfig.load().obs_password, "local-secret")
+
+    def test_detect_obs_websocket_clears_password_when_auth_disabled(self):
+        import platform_support
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "obs-studio" / "plugin_config" / "obs-websocket" / "config.json"
+            path.parent.mkdir(parents=True)
+            path.write_text(json.dumps({
+                "server_enabled": True, "server_port": 4456,
+                "auth_required": False, "server_password": "stale-password",
+            }), encoding="utf-8")
+            with patch.dict(platform_support.os.environ, {"APPDATA": temporary}):
+                self.assertEqual(platform_support.detect_obs_websocket_settings(), ("127.0.0.1", 4456, ""))
 
 
 class DesktopTests(unittest.TestCase):
@@ -1181,6 +1258,46 @@ class DesktopTests(unittest.TestCase):
         self.app._tick()
         self.assertEqual(self.app.size_exact_label.text(), "123,456,789 字节")
 
+    def test_desktop_request_error_logs_once_without_duplicate_entry(self):
+        self.app.clear_activity_log()
+        future = Future()
+        future.set_exception(core.OBSRequestError("当前编码器不支持暂停"))
+        with patch.object(self.app.controller, "submit", return_value=future):
+            self.app._on_event("error", "当前编码器不支持暂停")
+            self.app.perform("pause")
+            self.app._tick()
+        self.assertEqual(len(self.app.activity_entries), 1)
+        self.assertEqual(self.app.activity_entries[0][2], "当前编码器不支持暂停")
+
+    def test_settings_rejects_bracketed_ipv6_with_port_and_accepts_plain_ipv6(self):
+        import desktop_ui
+        for bad in ("[::1]:4455", "[::1", "::1]", "127.0.0.1:4455", "bad\x00host"):
+            with self.subTest(bad=bad):
+                with self.assertRaises(ValueError):
+                    desktop_ui._validate_obs_host(bad)
+        self.assertEqual(desktop_ui._validate_obs_host("::1"), "::1")
+        self.assertEqual(desktop_ui._validate_obs_host("[::1]"), "[::1]")
+
+    def test_disabled_remote_disables_address_selector_and_shows_closed_state(self):
+        self.app.remote = None
+        self.app._known_addresses = ["192.0.2.10"]
+        self.app._sync_remote_ui(discover=False)
+        self.assertFalse(self.app.address_combo.isEnabled())
+        self.assertEqual(self.app.address_combo.currentText(), "手机遥控已关闭")
+        self.assertIsNone(self.app.address_combo.currentData())
+
+    def test_repeated_copy_link_resets_feedback_timer(self):
+        self._fake_phone_service()
+        self.app._known_addresses = ["192.0.2.10"]
+        self.app._sync_remote_ui(discover=False)
+        self.app.copy_link()
+        self.assertEqual(self.app.copy_button.text(), "已复制")
+        self.assertTrue(self.app._copy_link_timer.isActive())
+        self.app.copy_link()
+        self.assertEqual(self.app.copy_button.text(), "已复制")
+        self.app._copy_link_timer.timeout.emit()
+        self.assertEqual(self.app.copy_button.text(), "复制链接")
+
 
 class AudioTests(unittest.TestCase):
     def test_damaged_cached_tone_is_regenerated(self):
@@ -1216,6 +1333,19 @@ class AudioTests(unittest.TestCase):
             self.assertFalse(tone_path.exists())
             player.play('start')
             self.assertTrue(tone_path.exists())
+            play_sound.assert_called_once()
+
+    def test_play_regenerates_corrupted_tone_file(self):
+        import wave
+        from platform_support import AudioPlayer
+        with tempfile.TemporaryDirectory() as temporary, patch('platform_support.SOUND_DIR', Path(temporary)), \
+             patch('platform_support.winsound.PlaySound') as play_sound:
+            player = AudioPlayer()
+            tone_path = Path(temporary) / 'start.wav'
+            tone_path.write_bytes(b'corrupted')
+            player.play('start')
+            with wave.open(str(tone_path), 'rb') as tone:
+                self.assertGreater(tone.getnframes(), 0)
             play_sound.assert_called_once()
 
     def test_all_four_operation_tones_are_distinct_valid_pcm(self):
@@ -1396,6 +1526,39 @@ class RemoteTests(unittest.TestCase):
         with socket.socket() as connection:
             connection.settimeout(1)
             self.assertNotEqual(connection.connect_ex(("127.0.0.1", port)), 0)
+
+    def test_case_insensitive_same_origin_is_allowed(self):
+        req = urllib.request.Request(
+            f"{self.base}/api/status",
+            headers={
+                "Host": f"LOCALHOST:{self.server.port}",
+                "Origin": f"http://localhost:{self.server.port}",
+                "X-OBS-Token": self.server.token,
+            },
+        )
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(req, timeout=2) as response:
+            self.assertEqual(response.status, 200)
+
+    def test_stopping_remote_unblocks_waiting_control_request_with_503(self):
+        pending = Future()
+        started = threading.Event()
+        def slow_submit(action):
+            started.set()
+            return pending
+        results = []
+        def call_control():
+            try:
+                self.request("/api/control", {"action": "pause"})
+            except urllib.error.HTTPError as exc:
+                results.append(exc.code)
+        with patch.object(self.controller, "submit", side_effect=slow_submit):
+            worker = threading.Thread(target=call_control)
+            worker.start()
+            self.assertTrue(started.wait(2))
+            self.server.stop()
+            worker.join(timeout=3)
+        self.assertEqual(results, [503])
 
 
 if __name__ == "__main__":

@@ -261,6 +261,15 @@ async function enterKeyInPairingInputSubmitsLink() {
   assert.equal(h.ids.pairing.hidden, true);
 }
 
+async function unauthorizedControlTransitionsToPairingWithoutDuplicateToast() {
+  const h = harness(false, {hash:'#token='+savedToken}); await h.initial();
+  const click = h.button('pause').listeners.click();
+  await h.respond(h.pending('/api/control'), {message:'配对已重置'}, 401); await click;
+  assert.equal(h.ids.pairing.hidden, false);
+  assert.equal(h.ids.notice.textContent, '配对已重置');
+  assert.equal(h.ids.toast.textContent, '');
+}
+
 (async()=>{
   let failed = 0;
   const tests = [closeAndReopenBrowserAtRoot,cookieOnlyPairingWorksWithBlockedStorage,
@@ -274,7 +283,7 @@ async function enterKeyInPairingInputSubmitsLink() {
     oldSuccessfulResponseCannotOverwriteStateAfterNewPairing,
     reconnectionUnlocksControlsImmediatelyWhileOldControlStillInFlight,
     forgetReceivingUnauthorizedTransitionsDirectlyToPairing,malformedPairingLinkShowsLocalizedError,
-    enterKeyInPairingInputSubmitsLink];
+    enterKeyInPairingInputSubmitsLink,unauthorizedControlTransitionsToPairingWithoutDuplicateToast];
   for (const test of tests) {
     try {await test();console.log('PASS',test.name);} catch(error){failed++;console.error('FAIL',test.name,error.message);}
   }
