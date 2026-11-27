@@ -80,6 +80,20 @@ class PairingIdentityTests(unittest.TestCase):
         from pathlib import Path
         self.assertNotEqual(PairingIdentity.credential_target(Path("profile-a")), PairingIdentity.credential_target(Path("profile-b")))
 
+    def test_corrupted_credential_rebuilds_identity_automatically(self):
+        store = MagicMock()
+        store.read.side_effect = ValueError("corrupted credential")
+        identity = PairingIdentity(store=store)
+        self.assertGreaterEqual(len(identity.token), 32)
+        store.write.assert_called_once_with(identity.token)
+
+    def test_unavailable_credential_store_raises_without_overwriting(self):
+        store = MagicMock()
+        store.read.side_effect = OSError("credential store busy")
+        with self.assertRaises(OSError):
+            PairingIdentity(store=store)
+        store.write.assert_not_called()
+
 
 class PersistentBrowserPairingTests(unittest.TestCase):
     def test_reset_between_body_validation_and_dispatch_rejects_the_mutation(self):
@@ -237,6 +251,55 @@ class PersistentBrowserPairingTests(unittest.TestCase):
         with self.assertRaises(urllib.error.HTTPError) as error:
             self.browser.open(raw, timeout=3)
         self.assertEqual(error.exception.code, 401)
+
+    def test_failed_response_never_sets_renewal_cookie(self):
+        with self.assertRaises(urllib.error.HTTPError) as not_found:
+            self.request("/api/nonexistent", token=True, data={})
+        self.assertEqual(not_found.exception.code, 404)
+        self.assertIsNone(not_found.exception.headers.get("Set-Cookie"))
+        self.assertFalse(list(self.jar))
+
+    def test_remote_control_unblocks_with_401_if_pairing_reset_while_waiting(self):
+        from concurrent.futures import Future
+        pending = Future()
+        started = threading.Event()
+        def slow_submit(action):
+            started.set()
+            return pending
+        with patch.object(self.controller, "submit", side_effect=slow_submit):
+            def reset_soon():
+                if started.wait(2):
+                    self.server.reset_pairing()
+            worker = threading.Thread(target=reset_soon)
+            worker.start()
+            try:
+                with self.assertRaises(urllib.error.HTTPError) as error:
+                    self.request("/api/control", token=True, data={"action": "pause"})
+                self.assertEqual(error.exception.code, 401)
+            finally:
+                worker.join(2)
+
+    def test_remote_control_cancellation_race_returns_200_when_future_completes(self):
+        from unittest.mock import PropertyMock
+        snapshot = self.controller.snapshot()
+        class LateCancelFuture:
+            def __init__(self):
+                self._done = False
+            def result(self, timeout=None):
+                if not self._done:
+                    raise TimeoutError()
+                return {"ok": True, "message": "开始录制成功", "state": snapshot}
+            def done(self):
+                return self._done
+            def cancel(self):
+                self._done = True
+                return False
+        with patch.object(type(self.controller), "control_timeout", new_callable=PropertyMock, return_value=0.02), \
+             patch.object(self.controller, "submit", return_value=LateCancelFuture()):
+            with self.request("/api/control", token=True, data={"action": "start"}) as response:
+                payload = json.load(response)
+                self.assertTrue(payload["ok"])
+                self.assertNotIn("last_file", payload["state"])
 
 
 class SingleInstanceTests(unittest.TestCase):

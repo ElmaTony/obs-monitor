@@ -50,9 +50,14 @@ async function invalidPairingOffersLinkInsteadOfReloadLoop() {
   assert.equal(h.requests.length, 1);
   h.ids.pairLink.value = 'http://pc:8765/#token='+savedToken;
   h.ids.pairConnect.listeners.click();
+  assert.equal(h.ids.pairConnect.disabled, true);
+  assert.equal(h.ids.pairConnect.textContent, '正在连接…');
   const request = h.pending('/api/status');
   assert.equal(request.options.headers['X-OBS-Token'], savedToken);
   await h.respond(request, state());
+  assert.equal(h.ids.pairConnect.disabled, false);
+  assert.equal(h.ids.pairConnect.textContent, '连接电脑');
+  assert.equal(h.ids.pairLink.value, '');
   assert.equal(h.button('pause').disabled, false);
   assert.equal(h.ids.pairing.hidden, true);
 }

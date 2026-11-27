@@ -18,7 +18,15 @@ class PairingIdentity:
     def __init__(self, token=None, store=None):
         self._lock = threading.RLock()
         self._store = store
-        value = token if token is not None else store.read() if store else ""
+        if token is not None:
+            value = token
+        elif store:
+            try:
+                value = store.read()
+            except ValueError:
+                value = ""
+        else:
+            value = ""
         if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", value):
             value = secrets.token_urlsafe(32)
             if store:

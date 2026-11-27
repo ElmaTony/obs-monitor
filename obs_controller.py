@@ -80,22 +80,35 @@ class OBSWebSocketClient:
             data["requestData"] = request_data
         self.ws.send(json.dumps({"op": 6, "d": data}))
         deadline = time.monotonic() + self.timeout
-        while time.monotonic() < deadline:
-            message = self._recv_json()
-            if message.get("op") == 5:
-                continue
-            payload = message.get("d")
-            if message.get("op") != 7 or not isinstance(payload, dict) or payload.get("requestId") != request_id:
-                continue
-            # The official protocol uses requestStatus, never responseStatus.
-            status = payload.get("requestStatus")
-            status = status if isinstance(status, dict) else {}
-            if not status.get("result"):
-                comment = status.get("comment") or f"请求失败（{status.get('code', '未知错误')}）"
-                raise OBSRequestError(comment)
-            response = payload.get("responseData")
-            return {} if response is None else response
-        raise TimeoutError("OBS 响应超时")
+        has_settimeout = hasattr(self.ws, "settimeout")
+        try:
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                if has_settimeout:
+                    self.ws.settimeout(max(0.05, remaining))
+                message = self._recv_json()
+                if message.get("op") == 5:
+                    continue
+                payload = message.get("d")
+                if message.get("op") != 7 or not isinstance(payload, dict) or payload.get("requestId") != request_id:
+                    continue
+                # The official protocol uses requestStatus, never responseStatus.
+                status = payload.get("requestStatus")
+                status = status if isinstance(status, dict) else {}
+                if not status.get("result"):
+                    comment = status.get("comment") or f"请求失败（{status.get('code', '未知错误')}）"
+                    raise OBSRequestError(comment)
+                response = payload.get("responseData")
+                return {} if response is None else response
+            raise TimeoutError("OBS 响应超时")
+        finally:
+            if has_settimeout and self.ws is not None:
+                try:
+                    self.ws.settimeout(self.timeout)
+                except Exception:
+                    pass
 
     def get_record_status(self):
         data = self.request("GetRecordStatus")
@@ -150,6 +163,8 @@ class OBSController:
         self.interval = interval
         self.confirmation_timeout = confirmation_timeout
         self._lock = threading.RLock()
+        self._config_lock = threading.RLock()
+        self._config_override = {}
         self._state = {"connected": False, "active": False, "paused": False, "bytes": 0,
                        "duration_ms": 0, "message": "正在连接 OBS…", "last_file": "", "busy": False}
         self._commands = queue.Queue(maxsize=16)
@@ -167,6 +182,18 @@ class OBSController:
         self._settle_seconds = 0.2
         self._drain_seconds = 0.0
 
+    def _effective_config_values(self):
+        cfg = self.config
+        override = self._config_override
+        return {
+            "sound_enabled": override.get("sound_enabled", cfg.sound_enabled),
+            "sound_actions": dict(override.get("sound_actions", cfg.sound_actions)),
+            "threshold_gb": override.get("threshold_gb", cfg.threshold_gb),
+            "alert_enabled": override.get("alert_enabled", cfg.alert_enabled),
+            "theme": override.get("theme", cfg.theme),
+            "help_seen": override.get("help_seen", cfg.help_seen),
+        }
+
     @property
     def control_timeout(self):
         with self._lock:
@@ -179,10 +206,12 @@ class OBSController:
             state["revision"] = self._snapshot_revision
             state["instance_id"] = self._instance_id
             sampled = self._sampled_at
-            state.update(sound_enabled=self.config.sound_enabled,
-                         sound_actions=dict(self.config.sound_actions),
-                         threshold_bytes=int(self.config.threshold_gb * 1024**3),
-                         alert_enabled=self.config.alert_enabled, alerted=self._alerted,
+            cfg = self._effective_config_values()
+            state.update(sound_enabled=cfg["sound_enabled"],
+                         sound_actions=cfg["sound_actions"],
+                         threshold_gb=cfg["threshold_gb"],
+                         threshold_bytes=int(cfg["threshold_gb"] * 1024**3),
+                         alert_enabled=cfg["alert_enabled"], alerted=self._alerted,
                          control_timeout_ms=int(self.control_timeout * 1000))
         state["data_age_ms"] = None if sampled is None else max(0, int((time.monotonic() - sampled) * 1000))
         state["stale"] = not state["connected"] or sampled is None or state["data_age_ms"] > 3000
@@ -212,8 +241,8 @@ class OBSController:
         with self._lock:
             self._stop.set()
             self._state.update(connected=False, busy=False, message="软件已关闭")
+            client = self._client
         self._wake.set()
-        client = self._client
         if client:
             client.close()
         if self._thread and self._thread is not threading.current_thread():
@@ -223,6 +252,7 @@ class OBSController:
     def reconnect(self):
         with self._lock:
             self._reconnect.set()
+            self._last_error = ""
             self._state.update(connected=False, message="正在重新连接 OBS…")
             self._fail_pending("OBS 连接正在重置，请确认当前状态后重试")
             client = None if self._state["busy"] else self._client
@@ -245,80 +275,82 @@ class OBSController:
                     future.set_exception(RuntimeError("操作过于频繁，请稍后重试"))
         return future
 
-    def set_sound_enabled(self, enabled):
-        if not isinstance(enabled, bool):
-            raise ValueError("提示音开关必须是布尔值")
-        with self._lock:
-            old = self.config.sound_enabled
-            self.config.sound_enabled = enabled
+    def _update_config_field(self, key, value, copy_dict=False, skip_if_unchanged=False):
+        with self._config_lock:
+            with self._lock:
+                old = getattr(self.config, key)
+                if copy_dict:
+                    old = dict(old)
+                    new_value = dict(value)
+                else:
+                    new_value = value
+                if skip_if_unchanged and old == new_value:
+                    return False
+                self._config_override[key] = old
+                setattr(self.config, key, new_value)
             try:
                 self.config.save()
             except Exception:
-                self.config.sound_enabled = old
+                with self._lock:
+                    setattr(self.config, key, old)
+                    self._config_override.pop(key, None)
                 raise
+            with self._lock:
+                self._config_override.pop(key, None)
+            return True
+
+    def set_sound_enabled(self, enabled):
+        if not isinstance(enabled, bool):
+            raise ValueError("提示音开关必须是布尔值")
+        self._update_config_field("sound_enabled", enabled)
         self.on_event("log", "操作提示音已" + ("开启" if enabled else "关闭"))
 
     def set_sound_actions(self, values):
         if set(values) != set(REQUESTS) or any(not isinstance(value, bool) for value in values.values()):
             raise ValueError("操作提示音设置无效")
-        with self._lock:
-            old = self.config.sound_actions
-            self.config.sound_actions = dict(values)
-            try:
-                self.config.save()
-            except Exception:
-                self.config.sound_actions = old
-                raise
+        self._update_config_field("sound_actions", values, copy_dict=True)
 
     def set_theme(self, theme):
         if theme not in ("light", "dark"):
             raise ValueError("主题无效")
-        with self._lock:
-            old = self.config.theme
-            self.config.theme = theme
-            try:
-                self.config.save()
-            except Exception:
-                self.config.theme = old
-                raise
+        self._update_config_field("theme", theme)
 
     def mark_help_seen(self):
-        with self._lock:
-            if self.config.help_seen:
-                return
-            self.config.help_seen = True
-            try:
-                self.config.save()
-            except Exception:
-                self.config.help_seen = False
-                raise
+        self._update_config_field("help_seen", True, skip_if_unchanged=True)
 
     def apply_connection_config(self, candidate):
         # Settings dialogs and phone sound updates share a transaction. A sound
         # toggle received while a dialog is open must not be lost when it saves.
         old_client = None
-        with self._lock:
-            candidate.sound_enabled = self.config.sound_enabled
-            candidate.sound_actions = dict(self.config.sound_actions)
-            candidate.theme = self.config.theme
-            candidate.help_seen = self.config.help_seen
-            previous = self.config
-            changed = any(getattr(candidate, key) != getattr(previous, key)
-                          for key in ("obs_host", "obs_port", "obs_password"))
-            if changed and self._state["busy"]:
-                raise ValueError("正在确认录制操作，请等待操作完成后再修改 OBS 连接")
+        with self._config_lock:
+            with self._lock:
+                candidate.sound_enabled = self.config.sound_enabled
+                candidate.sound_actions = dict(self.config.sound_actions)
+                candidate.theme = self.config.theme
+                candidate.help_seen = self.config.help_seen
+                previous = self.config
+                changed = any(getattr(candidate, key) != getattr(previous, key)
+                              for key in ("obs_host", "obs_port", "obs_password"))
+                if changed and self._state["busy"]:
+                    raise ValueError("正在确认录制操作，请等待操作完成后再修改 OBS 连接")
             candidate.save(save_password=True)
-            self.config = candidate
-            if changed:
-                self._reconnect.set()
-                self._state.update(connected=False, message="正在重新连接 OBS…")
-                if (candidate.obs_host, candidate.obs_port) != (previous.obs_host, previous.obs_port):
-                    self._last_observed = self._sampled_at = None
-                    self._alerted = False
-                    self._state.update(active=False, paused=False, bytes=0, duration_ms=0, last_file="")
-                self._fail_pending("OBS 连接设置已更改，旧操作已取消，请确认新连接的状态")
-                old_client = self._client
-                self._wake.set()
+            with self._lock:
+                candidate.sound_enabled = self.config.sound_enabled
+                candidate.sound_actions = dict(self.config.sound_actions)
+                candidate.theme = self.config.theme
+                candidate.help_seen = self.config.help_seen
+                self.config = candidate
+                if changed:
+                    self._reconnect.set()
+                    self._last_error = ""
+                    self._state.update(connected=False, message="正在重新连接 OBS…")
+                    if (candidate.obs_host, candidate.obs_port) != (previous.obs_host, previous.obs_port):
+                        self._last_observed = self._sampled_at = None
+                        self._alerted = False
+                        self._state.update(active=False, paused=False, bytes=0, duration_ms=0, last_file="")
+                    self._fail_pending("OBS 连接设置已更改，旧操作已取消，请确认新连接的状态")
+                    old_client = self._client
+                    self._wake.set()
         if old_client:
             old_client.close()
         return previous
@@ -349,8 +381,9 @@ class OBSController:
                 display["bytes"] = self._state["bytes"]
                 display["duration_ms"] = self._state["duration_ms"]
             self._last_observed = current
-            threshold = int(self.config.threshold_gb * 1024**3)
-            fire_alert = self.config.alert_enabled and current["active"] and current["bytes"] >= threshold and not self._alerted
+            cfg = self._effective_config_values()
+            threshold = int(cfg["threshold_gb"] * 1024**3)
+            fire_alert = cfg["alert_enabled"] and current["active"] and current["bytes"] >= threshold and not self._alerted
             if fire_alert:
                 self._alerted = True
             self._sampled_at = time.monotonic()
@@ -380,11 +413,11 @@ class OBSController:
             # Video settings can change between recordings without reconnecting.
             frame_interval = self._client.get_frame_interval()
             with self._lock:
-                self._settle_seconds = max(0.2, 3 * frame_interval)
+                self._settle_seconds = min(30.0, max(0.2, 3 * frame_interval))
                 # OBS NVENC can queue up to 64 frames when stopping. For other
                 # transitions, fractional frame rates still need at least two
                 # frame intervals before the output flag flips.
-                self._drain_seconds = (64 if action == "stop" else 2) * frame_interval
+                self._drain_seconds = min(600.0, (64 if action == "stop" else 2) * frame_interval)
             if self._stop.is_set() or self._reconnect.is_set():
                 raise OBSRequestError("软件已关闭或 OBS 连接已重置，操作未执行")
             request_sent = True
@@ -397,7 +430,8 @@ class OBSController:
             # timestamps. A second pause during that interval is silently ignored by
             # OBS. Keep the transition busy for at least three video frame intervals,
             # and require the target state to stay stable throughout that window.
-            deadline = time.monotonic() + max(self.confirmation_timeout, self._drain_seconds) + self._settle_seconds
+            flip_deadline = time.monotonic() + max(self.confirmation_timeout, self._drain_seconds)
+            base_deadline = flip_deadline + self._settle_seconds
             confirmed_since = None
             while not self._stop.is_set() and not self._reconnect.is_set():
                 data = self._client.get_record_status()
@@ -416,7 +450,12 @@ class OBSController:
                     confirmed_since = now
                 if confirmed_since is not None and now - confirmed_since >= self._settle_seconds:
                     break
-                if now >= deadline:
+                effective_deadline = (
+                    max(base_deadline, min(confirmed_since + self._settle_seconds + 0.1, flip_deadline + 2 * self._settle_seconds))
+                    if confirmed_since is not None
+                    else base_deadline
+                )
+                if now >= effective_deadline:
                     if action == "stop":
                         raise OBSRequestError("OBS 已接收结束录制请求，但尚未完成收尾；请检查 OBS 当前状态")
                     raise OBSRequestError("OBS 已接收请求，但录制状态未改变；请检查 OBS 中的对话框、录制编码器和当前状态")
@@ -467,19 +506,21 @@ class OBSController:
             client = None
             try:
                 with self._lock:
+                    if self._stop.is_set():
+                        break
                     self._reconnect.clear()
                     config = self.config
-                client = self.client_factory(config.obs_host, config.obs_port, config.obs_password)
-                self._client = client
-                if self._stop.is_set():
-                    break
+                    client = self.client_factory(config.obs_host, config.obs_port, config.obs_password)
+                    self._client = client
+                if self._stop.is_set() or self._reconnect.is_set():
+                    continue
                 client.connect()
                 frame_interval = client.get_frame_interval()
                 data = client.get_record_status()
                 with self._lock:
                     if self._stop.is_set() or self._reconnect.is_set():
                         continue
-                    self._settle_seconds = max(0.2, 3 * frame_interval)
+                    self._settle_seconds = min(30.0, max(0.2, 3 * frame_interval))
                     self._observe(data)
                 self.on_event("log", "OBS 已连接")
                 self._last_error = ""
@@ -509,10 +550,12 @@ class OBSController:
                     self.on_event("error", message)
                     self._last_error = message
             finally:
+                with self._lock:
+                    if self._client is client:
+                        self._client = None
+                    self._state["connected"] = False
                 if client:
                     client.close()
-                self._client = None
-                self._update(connected=False)
                 self._fail_pending("OBS 连接已重置，请查看当前状态后重新操作")
             if not self._stop.is_set() and not self._reconnect.is_set():
                 self._wake.wait(2)

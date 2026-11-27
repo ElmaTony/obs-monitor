@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 import json
 import math
 import os
@@ -14,6 +15,21 @@ CONFIG_PATH = APP_DIR / "config.json"
 ACTIONS = {"start": "开始录制", "stop": "结束录制", "pause": "暂停录制", "resume": "继续录制"}
 LOCAL_OBS_HOSTS = {"127.0.0.1", "localhost", "::1", "[::1]"}
 _save_lock = threading.Lock()
+
+
+def validate_obs_host(raw_host):
+    address = raw_host.strip() or "127.0.0.1"
+    if any(ord(c) < 32 or c.isspace() or c in "/?#@\\" for c in address):
+        raise ValueError("OBS 地址请只填写 IP 或主机名")
+    if "[" in address or "]" in address or ":" in address:
+        candidate = address[1:-1] if address.startswith("[") and address.endswith("]") else address
+        if "[" in candidate or "]" in candidate:
+            raise ValueError("OBS 地址请只填写 IP 或主机名，端口请在下方单独填写")
+        try:
+            ipaddress.IPv6Address(candidate)
+        except ValueError as exc:
+            raise ValueError("OBS 地址请只填写 IP 或主机名，端口请在下方单独填写") from exc
+    return address
 
 
 @dataclass
@@ -47,7 +63,10 @@ class AppConfig:
         if raw.get("theme") in ("light", "dark"):
             result.theme = raw["theme"]
         if isinstance(raw.get("obs_host"), str):
-            result.obs_host = raw["obs_host"].strip() or host
+            try:
+                result.obs_host = validate_obs_host(raw["obs_host"])
+            except ValueError:
+                result.obs_host = host
         if not stored_password and result.obs_host.casefold() not in LOCAL_OBS_HOSTS:
             result.obs_password = ""
         for key in ("obs_port", "remote_port"):
@@ -93,11 +112,18 @@ class AppConfig:
             except (OSError, ValueError):
                 pass
             CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            credential_store = WindowsCredentialStore() if save_password else None
+            previous_password = None
+            previous_password_valid = False
+            if credential_store:
+                try:
+                    previous_password = credential_store.read()
+                    previous_password_valid = True
+                except ValueError:
+                    previous_password = ""
             handle, filename = tempfile.mkstemp(prefix=".config-", suffix=".tmp", dir=CONFIG_PATH.parent)
             os.close(handle)
             temporary = Path(filename)
-            credential_store = WindowsCredentialStore() if save_password else None
-            previous_password = credential_store.read() if credential_store else None
             credential_written = False
             try:
                 # Prepare JSON before changing a credential. If the final replace
@@ -110,7 +136,10 @@ class AppConfig:
             except Exception:
                 if credential_written:
                     try:
-                        credential_store.write(previous_password)
+                        if previous_password_valid:
+                            credential_store.write(previous_password)
+                        else:
+                            credential_store.delete()
                     except OSError as rollback_error:
                         raise OSError("配置保存失败，OBS 密码也未能恢复，请在连接设置中重新填写密码") from rollback_error
                 raise

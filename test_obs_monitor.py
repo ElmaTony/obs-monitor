@@ -136,6 +136,32 @@ class ProtocolTests(unittest.TestCase):
                 with self.assertRaises(ConnectionError):
                     client.request("GetRecordStatus")
 
+    def test_request_tightens_socket_timeout_across_event_frames(self):
+        timeouts = []
+        class EventThenReplySocket:
+            def __init__(self):
+                self.sent = []
+                self.calls = 0
+            def settimeout(self, value):
+                timeouts.append(value)
+            def send(self, value):
+                self.sent.append(json.loads(value))
+            def recv(self):
+                self.calls += 1
+                if self.calls == 1:
+                    return json.dumps({"op": 5, "d": {"eventType": "RecordStateChanged"}})
+                request_id = self.sent[-1]["d"]["requestId"]
+                return json.dumps({"op": 7, "d": {"requestId": request_id, "requestStatus": {"result": True, "code": 100}, "responseData": {"ok": True}}})
+        clock = iter([10.0, 10.0, 11.2, 11.2])
+        client = core.OBSWebSocketClient("127.0.0.1", 4455, "", timeout=2.5)
+        client.ws = EventThenReplySocket()
+        with patch.object(core.time, "monotonic", side_effect=lambda: next(clock)):
+            self.assertEqual(client.request("GetVersion"), {"ok": True})
+        self.assertEqual(len(timeouts), 3)
+        self.assertAlmostEqual(timeouts[0], 2.5)
+        self.assertAlmostEqual(timeouts[1], 1.3)
+        self.assertAlmostEqual(timeouts[2], 2.5)
+
 
 class FakeOBS:
     def __init__(self):
@@ -660,6 +686,72 @@ class ControllerTests(unittest.TestCase):
             self.controller.apply_connection_config(candidate)
         stale_client.close.assert_called_once()
 
+    def test_reconnect_and_config_change_clear_last_error_for_repeated_failure(self):
+        bad = MagicMock()
+        bad.connect.side_effect = ConnectionError("refused")
+        self.controller._last_error = "无法连接 OBS：refused"
+        self.controller.reconnect()
+        self.assertEqual(self.controller._last_error, "")
+        self.controller._last_error = "无法连接 OBS：refused"
+        candidate = settings.AppConfig(obs_port=4456)
+        with patch.object(candidate, "save"):
+            self.controller.apply_connection_config(candidate)
+        self.assertEqual(self.controller._last_error, "")
+
+    def test_boundary_flip_completes_settling_window(self):
+        clock = [0.0]
+        self.controller.confirmation_timeout = 1.0
+        self.controller._client = self.fake
+        self.fake.get_frame_interval = lambda: 0.1  # settle = 0.3s, base_deadline = 1.3s
+        original_status = self.fake.get_record_status
+        def delayed_flip():
+            self.fake.active = clock[0] >= 1.25
+            return original_status()
+        def advance(seconds):
+            clock[0] += seconds
+            return False
+        self.fake.request = lambda name: self.fake.requests.append(name) or {}
+        self.fake.get_record_status = delayed_flip
+        future = Future()
+        with patch.object(core.time, "monotonic", side_effect=lambda: clock[0]), \
+             patch.object(self.controller._stop, "wait", side_effect=advance):
+            self.controller._execute("start", future, 0.0)
+        self.assertTrue(future.result()["ok"])
+        self.assertGreaterEqual(clock[0], 1.5)
+
+    def test_extreme_low_fps_budget_is_capped(self):
+        clock = [0.0]
+        self.fake.active = True
+        self.controller._client = self.fake
+        self.fake.get_frame_interval = lambda: 60.0
+        def advance(seconds):
+            clock[0] += seconds
+            return False
+        future = Future()
+        with patch.object(core.time, "monotonic", side_effect=lambda: clock[0]), \
+             patch.object(self.controller._stop, "wait", side_effect=advance):
+            self.controller._execute("stop", future, 0.0)
+        self.assertTrue(future.result()["ok"])
+        self.assertLessEqual(self.controller._settle_seconds, 30.0)
+        self.assertLessEqual(self.controller.control_timeout, 640.0)
+
+    def test_slow_config_save_does_not_block_snapshot_or_expose_uncommitted_value(self):
+        entered, release = threading.Event(), threading.Event()
+        def slow_save():
+            entered.set()
+            release.wait(2)
+        with patch.object(self.config, "save", side_effect=slow_save):
+            worker = threading.Thread(target=lambda: self.controller.set_sound_enabled(False))
+            worker.start()
+            try:
+                self.assertTrue(entered.wait(1))
+                snap = self.controller.snapshot()
+                self.assertTrue(snap["sound_enabled"])
+            finally:
+                release.set()
+                worker.join(2)
+        self.assertFalse(self.controller.snapshot()["sound_enabled"])
+
 
 class SettingsTests(unittest.TestCase):
     def test_default_route_is_preferred_over_virtual_adapter_addresses(self):
@@ -796,6 +888,80 @@ class SettingsTests(unittest.TestCase):
             }), encoding="utf-8")
             with patch.dict(platform_support.os.environ, {"APPDATA": temporary}):
                 self.assertEqual(platform_support.detect_obs_websocket_settings(), ("127.0.0.1", 4456, ""))
+
+    def test_corrupted_credential_allows_password_overwrite_and_leaves_no_temp_file(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(settings, "CONFIG_PATH", Path(tmp) / "config.json"), \
+             patch.object(settings, "WindowsCredentialStore") as store:
+            store.return_value.read.side_effect = ValueError("corrupted")
+            settings.AppConfig(obs_password="new-password").save(save_password=True)
+            store.return_value.write.assert_called_once_with("new-password")
+            self.assertEqual([p.name for p in Path(tmp).iterdir()], ["config.json"])
+            store.return_value.write.reset_mock()
+            with patch.object(Path, "replace", side_effect=OSError("replace failed")):
+                with self.assertRaises(OSError):
+                    settings.AppConfig(obs_password="another-password").save(save_password=True)
+            store.return_value.delete.assert_called_once()
+
+    def test_credential_read_oserror_fails_before_creating_temp_file(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(settings, "CONFIG_PATH", Path(tmp) / "config.json"), \
+             patch.object(settings, "WindowsCredentialStore") as store:
+            store.return_value.read.side_effect = OSError("access denied")
+            with self.assertRaises(OSError):
+                settings.AppConfig(obs_password="secret").save(save_password=True)
+            self.assertEqual(list(Path(tmp).iterdir()), [])
+
+    def test_credential_store_validates_length_and_invalid_utf16(self):
+        import ctypes
+        import platform_support
+        store = platform_support.WindowsCredentialStore()
+        with self.assertRaises(ValueError):
+            store.write("a" * 1500)
+        bad_bytes = b"\xff\xd8"
+        buf = (ctypes.c_byte * len(bad_bytes)).from_buffer_copy(bad_bytes)
+        cred = platform_support._CREDENTIALW()
+        cred.CredentialBlobSize = len(bad_bytes)
+        cred.CredentialBlob = ctypes.cast(buf, ctypes.POINTER(ctypes.c_byte))
+        def fake_read(target, cred_type, flags, ptr_out):
+            ptr_out._obj.contents = cred
+            return 1
+        fake_advapi = MagicMock()
+        fake_advapi.CredReadW.side_effect = fake_read
+        store._advapi32 = fake_advapi
+        with self.assertRaises(ValueError):
+            store.read()
+        cred.CredentialBlobSize = 0
+        cred.CredentialBlob = None
+        self.assertEqual(store.read(), "")
+
+    def test_disabled_new_obs_websocket_config_does_not_fall_back_to_legacy(self):
+        import platform_support
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "obs-studio" / "plugin_config"
+            (root / "obs-websocket").mkdir(parents=True)
+            (root / "obs-websocket" / "config.json").write_text(json.dumps({"server_enabled": False, "server_port": 4457, "server_password": "new"}), encoding="utf-8")
+            (root / "obs-websocket.json").write_text(json.dumps({"enabled": True, "port": 4458, "password": "legacy"}), encoding="utf-8")
+            with patch.dict(platform_support.os.environ, {"APPDATA": temporary}):
+                self.assertEqual(platform_support.detect_obs_websocket_settings(), ("127.0.0.1", 4455, ""))
+
+    def test_load_ignores_invalid_obs_host_in_config_json(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(settings, "CONFIG_PATH", Path(tmp) / "config.json"), \
+             patch.object(settings, "detect_obs_websocket_settings", return_value=("127.0.0.1", 4455, "")), \
+             patch.object(settings, "WindowsCredentialStore") as store:
+            store.return_value.read.return_value = ""
+            settings.CONFIG_PATH.write_text(json.dumps({"obs_host": "127.0.0.1:9999"}), encoding="utf-8")
+            self.assertEqual(settings.AppConfig.load().obs_host, "127.0.0.1")
+
+    def test_lan_addresses_prefers_172_private_over_cgnat_and_falls_back_to_getaddrinfo(self):
+        from remote_server import lan_addresses
+        with patch("remote_server.socket.socket") as sock, \
+             patch("remote_server.socket.gethostbyname_ex", return_value=("pc", [], ["100.64.0.5", "172.16.10.2"])):
+            sock.return_value.__enter__.return_value.getsockname.return_value = ("100.64.0.5", 12345)
+            self.assertEqual(lan_addresses(), ["172.16.10.2", "100.64.0.5"])
+        with patch("remote_server.socket.socket") as sock, \
+             patch("remote_server.socket.gethostbyname_ex", side_effect=OSError("legacy failed")), \
+             patch("remote_server.socket.getaddrinfo", return_value=[(2, 1, 6, "", ("192.168.1.33", 0))]):
+            sock.return_value.__enter__.side_effect = OSError()
+            self.assertEqual(lan_addresses(), ["192.168.1.33"])
 
 
 class DesktopTests(unittest.TestCase):
@@ -1184,7 +1350,9 @@ class DesktopTests(unittest.TestCase):
         dialog = self.app.settings_window
         dialog.findChildren(QLineEdit)[0].setText("::1")
         save_button = next(b for b in dialog.findChildren(QPushButton) if b.text() == "保存并应用")
-        with patch("desktop_ui.QMessageBox.warning") as warn, patch.object(settings.AppConfig, "save") as save:
+        with patch("desktop_ui.QMessageBox.warning") as warn, \
+             patch.object(settings.AppConfig, "save") as save, \
+             patch.object(self.app, "_create_remote", return_value=MagicMock(port=8765)):
             save_button.click()
         warn.assert_not_called()
         save.assert_called_once()
@@ -1298,6 +1466,45 @@ class DesktopTests(unittest.TestCase):
         self.app._copy_link_timer.timeout.emit()
         self.assertEqual(self.app.copy_button.text(), "复制链接")
 
+    def test_large_threshold_gb_preserves_decimal_digit(self):
+        self.config.threshold_gb = 100000.5
+        self.app._tick()
+        self.assertEqual(self.app.threshold_label.text(), "提醒于 100000.5 GB · 每次一次")
+
+    def test_reset_pairing_works_when_remote_is_disabled(self):
+        from PySide6.QtWidgets import QMessageBox, QPushButton
+        self.app.remote = None
+        self.app.open_settings()
+        reset_btn = next(b for b in self.app.settings_window.findChildren(QPushButton) if b.text() == "重置所有手机配对")
+        self.assertTrue(reset_btn.isEnabled())
+        fake_identity = MagicMock()
+        with patch("desktop_ui.PairingIdentity.persistent", return_value=fake_identity), \
+             patch("desktop_ui.QMessageBox.question", return_value=QMessageBox.StandardButton.Yes):
+            reset_btn.click()
+        fake_identity.rotate.assert_called_once()
+
+    def test_non_dialog_popup_show_does_not_sync_title_bars(self):
+        from PySide6.QtCore import QEvent
+        from PySide6.QtWidgets import QWidget
+        popup = QWidget(self.app)
+        with patch.object(self.app, "_sync_title_bars") as sync:
+            self.app.eventFilter(popup, QEvent(QEvent.Type.Show))
+        sync.assert_not_called()
+
+    def test_activity_dialog_resize_finishes_theme_transition(self):
+        from PySide6.QtCore import QSize
+        from PySide6.QtGui import QResizeEvent
+        self.app.show()
+        self.app.open_activity_log()
+        self.qt.processEvents()
+        with patch("desktop_ui.animations_enabled", return_value=True), patch.object(self.config, "save"):
+            self.app.apply_theme("dark")
+        self.assertIsNotNone(self.app._theme_animation)
+        self.qt.sendEvent(self.app.activity_window, QResizeEvent(QSize(560, 440), self.app.activity_window.size()))
+        self.qt.processEvents()
+        self.assertIsNone(self.app._theme_animation)
+        self.assertEqual(self.app._theme_overlays, [])
+
 
 class AudioTests(unittest.TestCase):
     def test_damaged_cached_tone_is_regenerated(self):
@@ -1365,6 +1572,18 @@ class AudioTests(unittest.TestCase):
                     self.assertTrue(any(frames))
                 hashes.add(hashlib.sha256(path.read_bytes()).digest())
         self.assertEqual(len(hashes), 4)
+
+    def test_audio_player_caches_verified_stat_and_ignores_temp_cleanup_error(self):
+        from platform_support import AudioPlayer
+        with tempfile.TemporaryDirectory() as temporary, patch("platform_support.SOUND_DIR", Path(temporary)), \
+             patch("platform_support.winsound.PlaySound"):
+            player = AudioPlayer()
+            with patch.object(AudioPlayer, "_valid_tone", return_value=True) as valid_tone:
+                player.play("start")
+                player.play("start")
+            valid_tone.assert_not_called()
+            with patch.object(Path, "unlink", side_effect=OSError("locked")):
+                AudioPlayer._write_tone(Path(temporary) / "start.wav", AudioPlayer.SOUND_RECIPES["start"])
 
 
 class RemoteTests(unittest.TestCase):
@@ -1559,6 +1778,40 @@ class RemoteTests(unittest.TestCase):
             self.server.stop()
             worker.join(timeout=3)
         self.assertEqual(results, [503])
+
+    def test_same_origin_accepts_default_port_80_equivalence(self):
+        for origin, host in (("http://192.168.1.10", "192.168.1.10:80"), ("http://192.168.1.10:80", "192.168.1.10")):
+            with self.subTest(origin=origin, host=host):
+                req = urllib.request.Request(
+                    f"{self.base}/api/status",
+                    headers={"Host": host, "Origin": origin, "X-OBS-Token": self.server.token},
+                )
+                with urllib.request.urlopen(req, timeout=2) as response:
+                    self.assertEqual(response.status, 200)
+
+    def test_non_json_content_type_post_is_rejected(self):
+        with self.request("/api/status") as response:
+            cookie = response.headers["Set-Cookie"].split(";", 1)[0]
+        req = urllib.request.Request(
+            f"{self.base}/api/control",
+            data=b'{"action":"start"}',
+            headers={"Cookie": cookie, "Content-Type": "text/plain"},
+        )
+        with self.assertRaises(urllib.error.HTTPError) as context:
+            urllib.request.urlopen(req, timeout=2)
+        self.assertEqual(context.exception.code, 400)
+        self.assertEqual(self.fake.requests, [])
+
+    def test_api_responses_omit_last_file_path(self):
+        self.fake.active = True
+        with self.request("/api/status") as response:
+            self.assertNotIn("last_file", json.load(response))
+        with self.request("/api/control", {"action": "stop"}) as response:
+            self.assertNotIn("last_file", json.load(response)["state"])
+        self.assertEqual(self.controller.snapshot()["last_file"], "D:/recording.mkv")
+        with patch.object(self.config, "save"):
+            with self.request("/api/sound", {"enabled": False}) as response:
+                self.assertNotIn("last_file", json.load(response)["state"])
 
 
 if __name__ == "__main__":

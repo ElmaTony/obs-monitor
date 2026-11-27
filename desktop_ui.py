@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import ipaddress
 import queue
 import sys
 import threading
@@ -24,7 +23,7 @@ from obs_controller import LABELS, OBSController, OBSRequestError, format_size
 from pairing import PairingIdentity
 from platform_support import AudioPlayer, animations_enabled, set_title_bar_theme
 from remote_server import RemoteServer, lan_addresses
-from settings import AppConfig
+from settings import AppConfig, validate_obs_host
 from version import VERSION
 
 WINDOW_WIDTH = 840
@@ -85,19 +84,12 @@ PALETTES = {
 }
 
 
-def _validate_obs_host(raw_host):
-    address = raw_host.strip() or "127.0.0.1"
-    if any(ord(c) < 32 or c.isspace() or c in "/?#@\\" for c in address):
-        raise ValueError("OBS 地址请只填写 IP 或主机名")
-    if "[" in address or "]" in address or ":" in address:
-        candidate = address[1:-1] if address.startswith("[") and address.endswith("]") else address
-        if "[" in candidate or "]" in candidate:
-            raise ValueError("OBS 地址请只填写 IP 或主机名，端口请在下方单独填写")
-        try:
-            ipaddress.IPv6Address(candidate)
-        except ValueError as exc:
-            raise ValueError("OBS 地址请只填写 IP 或主机名，端口请在下方单独填写") from exc
-    return address
+_validate_obs_host = validate_obs_host
+_ICON_CACHE = {}
+
+
+def _format_threshold_gb(value):
+    return f"{float(value):.1f}".rstrip("0").rstrip(".")
 
 
 def text(value, role="body"):
@@ -120,6 +112,10 @@ def card(margins=(18, 16, 18, 16), spacing=10):
 
 
 def icon(name, color, size=22):
+    app = QApplication.instance()
+    key = (name, str(color), size)
+    if app is not None and key in _ICON_CACHE:
+        return _ICON_CACHE[key]
     pixmap = QPixmap(size * 2, size * 2)
     pixmap.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pixmap)
@@ -174,7 +170,10 @@ def icon(name, color, size=22):
         painter.drawLine(5, 4.5, 14, 4.5)
     painter.end()
     pixmap.setDevicePixelRatio(2)
-    return QIcon(pixmap)
+    result = QIcon(pixmap)
+    if app is not None:
+        _ICON_CACHE[key] = result
+    return result
 
 
 class ToggleSwitch(QCheckBox):
@@ -317,7 +316,9 @@ class ActivityDelegate(QStyledItemDelegate):
         if view_width <= 0 and self.parent():
             view_width = self.parent().viewport().width()
         text_width = max(160, view_width - 96)
-        bounds = self._body_metrics.boundingRect(
+        device = option.widget or self.parent()
+        metrics = QFontMetrics(self._body_font, device) if device is not None else self._body_metrics
+        bounds = metrics.boundingRect(
             QRect(0, 0, text_width, 2000),
             Qt.TextFlag.TextWordWrap,
             index.data(self.ROLE_MESSAGE) or "",
@@ -364,7 +365,8 @@ class ActivityDelegate(QStyledItemDelegate):
         if self.multiline:
             painter.drawText(msg_rect, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft | Qt.TextFlag.TextWordWrap, message)
         else:
-            elided = self._body_metrics.elidedText(message, Qt.TextElideMode.ElideRight, msg_rect.width())
+            metrics = QFontMetrics(self._body_font, painter.device()) if painter.device() is not None else self._body_metrics
+            elided = metrics.elidedText(message, Qt.TextElideMode.ElideRight, msg_rect.width())
             painter.drawText(msg_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, elided)
         painter.restore()
 
@@ -386,6 +388,9 @@ class ActivityDialog(QDialog):
         QTimer.singleShot(0, self, self._reflow)
 
     def resizeEvent(self, event):
+        parent = self.parentWidget()
+        if parent is not None and hasattr(parent, "_finish_theme_transition"):
+            parent._finish_theme_transition()
         super().resizeEvent(event)
         self._reflow()
 
@@ -972,7 +977,7 @@ QToolTip {{background:{p['surface']};color:{p['text']};border:1px solid {p['line
                     )
 
     def eventFilter(self, watched, event):
-        if event.type() in (QEvent.Type.Show, QEvent.Type.WindowActivate, QEvent.Type.WindowDeactivate) and isinstance(watched, QWidget) and watched.isWindow():
+        if event.type() in (QEvent.Type.Show, QEvent.Type.WindowActivate, QEvent.Type.WindowDeactivate) and isinstance(watched, (QMainWindow, QDialog)):
             if watched is self or self.isAncestorOf(watched):
                 # Qt can refresh the native caption after show/activation.
                 # Reapply custom colors after that refresh, including mid-fade.
@@ -1132,7 +1137,8 @@ QToolTip {{background:{p['surface']};color:{p['text']};border:1px solid {p['line
             if kind == "action":
                 level = "amber" if payload == "pause" else "red" if payload == "stop" else "accent"
                 self._log(LABELS[payload] + "成功", level=level)
-                if self.config.sound_enabled and self.config.sound_actions.get(payload, True):
+                sound_state = self.controller.snapshot()
+                if sound_state["sound_enabled"] and sound_state["sound_actions"].get(payload, True):
                     self._preview(payload, log=False)
             elif kind == "size_alert":
                 self._log(f"录制达到 {format_size(payload)}，已触发本次大小提醒。", level="amber")
@@ -1174,16 +1180,16 @@ QToolTip {{background:{p['surface']};color:{p['text']};border:1px solid {p['line
         self._set_label_text(self.size_label, state["size_text"])
         self._set_label_text(
             self.threshold_label,
-            f"提醒于 {self.config.threshold_gb:g} GB · 每次一次" if self.config.alert_enabled else "大小提醒已关闭",
+            f"提醒于 {_format_threshold_gb(state['threshold_gb'])} GB · 每次一次" if state["alert_enabled"] else "大小提醒已关闭",
         )
         self._set_label_text(
             self.size_exact_label,
             state["size_exact_text"] + (" · 上次数据" if state["stale"] and state["data_age_ms"] is not None else ""),
         )
-        ratio = min(1000, int(state["bytes"] / max(1, state["threshold_bytes"]) * 1000)) if self.config.alert_enabled else 0
+        ratio = min(1000, int(state["bytes"] / max(1, state["threshold_bytes"]) * 1000)) if state["alert_enabled"] else 0
         if self.progress.value() != ratio:
             self.progress.setValue(ratio)
-        chunk_color = p["red"] if self.config.alert_enabled and ratio >= 1000 else (p[mode] if mode else p["disabled"])
+        chunk_color = p["red"] if state["alert_enabled"] and ratio >= 1000 else (p[mode] if mode else p["disabled"])
         self._set_cached_style(
             "progress",
             self.progress,
@@ -1399,8 +1405,6 @@ QToolTip {{background:{p['surface']};color:{p['text']};border:1px solid {p['line
             webbrowser.open(self.remote.url("127.0.0.1"))
 
     def reset_phone_pairing(self):
-        if not self.remote:
-            return
         parent = self.settings_window if (self.settings_window and self.settings_window.isVisible()) else self
         answer = QMessageBox.question(
             parent,
@@ -1412,11 +1416,17 @@ QToolTip {{background:{p['surface']};color:{p['text']};border:1px solid {p['line
         if answer != QMessageBox.StandardButton.Yes:
             return
         try:
-            self.remote.reset_pairing()
+            if self.remote:
+                self.remote.reset_pairing()
+            else:
+                if self.pairing_identity is None:
+                    self.pairing_identity = PairingIdentity.persistent()
+                self.pairing_identity.rotate()
         except OSError as exc:
             QMessageBox.warning(parent, "配对未重置", str(exc))
             return
-        self._refresh_qr()
+        if self.remote:
+            self._refresh_qr()
         self._log("手机配对已重置，旧链接失效；请使用新链接或二维码连接。", level="amber")
 
     def open_settings(self):
@@ -1520,7 +1530,6 @@ QToolTip {{background:{p['surface']};color:{p['text']};border:1px solid {p['line
         reset_pairing = QPushButton("重置所有手机配对")
         reset_pairing.setProperty("kind", "outline")
         reset_pairing.setFixedHeight(32)
-        reset_pairing.setEnabled(self.remote is not None)
         reset_pairing.clicked.connect(self.reset_phone_pairing)
         reset_pairing.setToolTip("更换配对凭证，所有旧链接和已配对浏览器立即失效")
         layout.addWidget(reset_pairing)

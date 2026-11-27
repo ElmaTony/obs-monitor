@@ -252,16 +252,18 @@
     if (body !== undefined && path === '/api/control') armControlTimeout();
     else timeout = setTimeout(() => controller.abort(), body === undefined ? 4000 : 10000);
     try {
+      const headers = token ? {'X-OBS-Token': token} : {};
+      if (body !== undefined) headers['Content-Type'] = 'application/json';
       const response = await fetch(path, {
         method: body === undefined ? 'GET' : 'POST',
-        headers: {...(token ? {'X-OBS-Token': token} : {}), 'Content-Type': 'application/json'},
+        headers,
         body: body === undefined ? undefined : JSON.stringify(body), signal: controller.signal, cache: 'no-store', credentials: 'same-origin'
       });
       let value = {};
       try {
         value = await response.json();
       } catch {
-        if (response.ok) throw new Error('电脑返回的数据格式无效');
+        if (response.ok) throw Object.assign(new Error('电脑返回的数据格式无效'), {localError: true});
       }
       if (generation !== pairingGeneration) throw Object.assign(new Error('配对状态已更新'), {obsolete:true});
       if (!response.ok) {
@@ -302,13 +304,16 @@
   }
   function formatActionError(error, fallback) {
     if (error.name === 'AbortError') return '操作结果尚未确认，正在更新当前状态。';
-    if (error.status) return error.message || fallback;
+    if (error.status || error.localError) return error.message || fallback;
     return fallback;
   }
   function updateView() {
     if (!current) {lastLive = false; enableButtons(); return;}
     $('pairing').hidden = true;
     $('retry').hidden = true;
+    $('pairLink').value = '';
+    $('pairConnect').disabled = false;
+    $('pairConnect').textContent = '连接电脑';
     $('pairingStatus').textContent = '已配对 · 下次访问自动连接';
     const live = !expired();
     lastLive = live;
@@ -335,7 +340,7 @@
     enableButtons();
   }
   function render(state) {
-    if (!state || !state.allowed || !Number.isSafeInteger(state.revision) || typeof state.instance_id !== 'string' || !state.instance_id) throw new Error('电脑返回的状态无效，请确认电脑工具和手机页面都已更新');
+    if (!state || !state.allowed || !Number.isSafeInteger(state.revision) || typeof state.instance_id !== 'string' || !state.instance_id) throw Object.assign(new Error('电脑返回的状态无效，请确认电脑工具和手机页面都已更新'), {localError: true});
     if (state.instance_id !== acceptedInstance) {
       if (retiredInstances.has(state.instance_id)) return false;
       if (acceptedInstance) retiredInstances.add(acceptedInstance);
@@ -359,8 +364,11 @@
     $('state').textContent = '状态已过期';
     $('hero').classList.remove('live', 'paused');
     $('sound').disabled = true;
-    if ($('size').textContent !== '—' && !$('exactSize').textContent.endsWith(' · 上次有效数据')) $('exactSize').textContent += ' · 上次有效数据';
-    $('sizeHint').textContent = '等待重新连接，当前显示上次有效数据';
+    const hadSample = Boolean($('size').textContent && $('size').textContent !== '—');
+    if (hadSample && !$('exactSize').textContent.endsWith(' · 上次有效数据')) $('exactSize').textContent += ' · 上次有效数据';
+    $('sizeHint').textContent = hadSample ? '等待重新连接，当前显示上次有效数据' : '等待重新连接电脑';
+    $('pairConnect').disabled = false;
+    $('pairConnect').textContent = '连接电脑';
     $('retry').hidden = false;
     enableButtons();
     notice(message || '无法连接电脑，请检查 Wi-Fi 和电脑软件是否开启。');
@@ -487,14 +495,20 @@
       const nextToken = new URLSearchParams(link.hash.slice(1)).get('token');
       if (link.origin !== location.origin) throw new Error('链接地址与当前电脑不同，请直接打开粘贴的完整链接。');
       if (!nextToken || !/^[A-Za-z0-9_-]{32,128}$/.test(nextToken)) throw new Error('请输入电脑工具“复制链接”得到的完整地址。');
+      notice('');
+      $('pairConnect').disabled = true;
+      $('pairConnect').textContent = '正在连接…';
       pairingGeneration++;
       resetInFlight();
       token = nextToken;
       rememberToken(token);
       history.replaceState(null, '', location.pathname + '#token=' + encodeURIComponent(token));
-      $('pairLink').value = '';
       stopped = false; pollFailures = 0; void poll(true);
-    } catch (error) {notice(error.message);}
+    } catch (error) {
+      $('pairConnect').disabled = false;
+      $('pairConnect').textContent = '连接电脑';
+      notice(error.message);
+    }
   }
   $('pairConnect').addEventListener('click', connectByLink);
   $('pairLink').addEventListener('keydown', event => {if (event.key === 'Enter') connectByLink();});

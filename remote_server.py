@@ -27,6 +27,54 @@ class RemoteStoppedError(RuntimeError):
 class _RemoteHTTPServer(ThreadingHTTPServer):
     allow_reuse_address = sys.platform != "win32"
 
+    def __init__(self, server_address, RequestHandlerClass):
+        self._concurrency_slots = threading.BoundedSemaphore(32)
+        super().__init__(server_address, RequestHandlerClass)
+
+    def process_request(self, request, client_address):
+        if not self._concurrency_slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except Exception:
+            self._concurrency_slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._concurrency_slots.release()
+
+
+def _same_origin(origin, host_header):
+    if not host_header:
+        return False
+    try:
+        parsed_origin = urlsplit(origin)
+        parsed_host = urlsplit("http://" + host_header)
+    except ValueError:
+        return False
+    if (parsed_origin.scheme.casefold() != "http" or parsed_origin.path != ""
+            or parsed_origin.query or parsed_origin.fragment
+            or parsed_origin.username is not None or parsed_origin.password is not None):
+        return False
+    if (parsed_host.path or parsed_host.query or parsed_host.fragment
+            or parsed_host.username is not None or parsed_host.password is not None):
+        return False
+    if not parsed_origin.hostname or not parsed_host.hostname:
+        return False
+    if parsed_origin.hostname.casefold() != parsed_host.hostname.casefold():
+        return False
+    return (parsed_origin.port or 80) == (parsed_host.port or 80)
+
+
+def _public_state(state):
+    if not isinstance(state, dict) or "last_file" not in state:
+        return state
+    return {key: value for key, value in state.items() if key != "last_file"}
+
 
 def lan_addresses():
     addresses = []
@@ -41,9 +89,15 @@ def lan_addresses():
     try:
         addresses.extend(socket.gethostbyname_ex(socket.gethostname())[2])
     except OSError:
-        pass
+        try:
+            infos = socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)
+            addresses.extend(info[4][0] for info in infos if info[4])
+        except OSError:
+            pass
     # VPN benchmark addresses (198.18/15) are not reachable from a phone's Wi-Fi.
     benchmark = ipaddress.ip_network("198.18.0.0/15")
+    cgnat = ipaddress.ip_network("100.64.0.0/10")
+    rfc1918_172 = ipaddress.ip_network("172.16.0.0/12")
     valid = []
     for ip in dict.fromkeys(addresses):
         try:
@@ -53,8 +107,15 @@ def lan_addresses():
         if (parsed.is_loopback or parsed.is_link_local or parsed.is_unspecified
                 or parsed.is_multicast or parsed.is_reserved or parsed in benchmark):
             continue
-        valid.append(ip)
-    return sorted(valid, key=lambda ip: (ip != preferred, 0 if ip.startswith("192.168.") else 1 if ip.startswith("10.") else 2))
+        valid.append((ip, parsed))
+
+    def sort_key(item):
+        ip, parsed = item
+        is_lan = parsed.is_private and parsed not in cgnat
+        sub_rank = 0 if ip.startswith("192.168.") else 1 if ip.startswith("10.") else 2 if parsed in rfc1918_172 else 3
+        return (not is_lan, ip != preferred, sub_rank)
+
+    return [ip for ip, _ in sorted(valid, key=sort_key)]
 
 
 class RemoteServer:
@@ -112,7 +173,9 @@ class RemoteServer:
                     self.send_header("Connection", "close")
                     if forget:
                         self.send_header("Set-Cookie", f"{PAIRING_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict")
-                    elif getattr(self, "_renew_pairing", False) and hmac.compare_digest(self._pairing_token, owner.token):
+                    elif (200 <= status < 300 and owner._accepting.is_set()
+                          and getattr(self, "_renew_pairing", False)
+                          and hmac.compare_digest(self._pairing_token, owner.token)):
                         self.send_header("Set-Cookie", f"{PAIRING_COOKIE}={self._pairing_token}; Path=/; Max-Age={PAIRING_MAX_AGE}; HttpOnly; SameSite=Strict")
                     self.end_headers()
                     self.wfile.write(data)
@@ -126,7 +189,7 @@ class RemoteServer:
                     self.send_payload(503, {"ok": False, "message": "手机遥控已关闭"})
                     return False
                 origin = self.headers.get("Origin")
-                if origin and origin.casefold() != ("http://" + self.headers.get("Host", "")).casefold():
+                if origin and not _same_origin(origin, self.headers.get("Host", "")):
                     self.send_payload(403, {"ok": False, "message": "请求来源无效"})
                     return False
                 provided = self.headers.get("X-OBS-Token", "")
@@ -138,11 +201,14 @@ class RemoteServer:
                     saved = ""
                 token_at_auth = owner.token
                 expected = token_at_auth.encode("ascii")
-                if not any(hmac.compare_digest(value.encode("utf-8"), expected) for value in (provided, saved)):
+                header_match = bool(provided) and hmac.compare_digest(provided.encode("utf-8"), expected)
+                cookie_match = bool(saved) and hmac.compare_digest(saved.encode("utf-8"), expected)
+                if not (header_match or cookie_match):
                     self.send_payload(401, {"ok": False, "message": "此浏览器尚未配对，或电脑已重置配对。请粘贴电脑中的完整控制链接，或扫码连接。"})
                     return False
                 self._pairing_token = token_at_auth
-                self._renew_pairing = not hmac.compare_digest(saved.encode("utf-8"), expected)
+                self._used_header_token = header_match
+                self._renew_pairing = not cookie_match
                 return True
 
             def do_GET(self):
@@ -151,7 +217,7 @@ class RemoteServer:
                     self.send_payload(200, page, "text/html; charset=utf-8")
                 elif path == "/api/status":
                     if self.authenticated():
-                        self.send_payload(200, owner.controller.snapshot())
+                        self.send_payload(200, _public_state(owner.controller.snapshot()))
                 elif path == "/favicon.ico":
                     self.send_payload(204, b"", "image/x-icon")
                 else:
@@ -160,11 +226,29 @@ class RemoteServer:
             def do_POST(self):
                 if not self.authenticated():
                     return
+                ctype = self.headers.get("Content-Type", "").split(";", 1)[0].strip().casefold()
+                if (ctype and ctype != "application/json") or (not ctype and not getattr(self, "_used_header_token", False)):
+                    self.send_payload(400, {"ok": False, "message": "请求格式无效"})
+                    return
                 try:
                     length = int(self.headers.get("Content-Length", "0"))
                     if not 0 < length <= 4096:
                         raise ValueError("请求长度无效")
-                    body = self.rfile.read(length)
+                    read_deadline = time.monotonic() + 10.0
+                    read_chunk = getattr(self.rfile, "read1", self.rfile.read)
+                    chunks = []
+                    remaining_bytes = length
+                    while remaining_bytes > 0:
+                        left = read_deadline - time.monotonic()
+                        if left <= 0:
+                            raise TimeoutError("读取请求体超时")
+                        self.connection.settimeout(max(0.05, left))
+                        chunk = read_chunk(remaining_bytes)
+                        if not chunk:
+                            break
+                        chunks.append(chunk)
+                        remaining_bytes -= len(chunk)
+                    body = b"".join(chunks)
                     if len(body) != length:
                         raise ValueError("请求内容不完整")
                     data = json.loads(body)
@@ -192,6 +276,17 @@ class RemoteServer:
                     accepted, future = self.dispatch_operation(lambda: owner.controller.submit(data["action"]))
                     if not accepted:
                         return
+
+                    def send_control_result(done_future):
+                        try:
+                            payload = done_future.result(timeout=0)
+                        except Exception as real_exc:
+                            self.send_payload(409, {"ok": False, "message": str(real_exc) or "操作超时"})
+                        else:
+                            if isinstance(payload, dict) and "state" in payload:
+                                payload = {**payload, "state": _public_state(payload["state"])}
+                            self.send_payload(200, payload)
+
                     started = time.monotonic()
                     while True:
                         try:
@@ -199,21 +294,22 @@ class RemoteServer:
                             result = future.result(timeout=max(0, min(0.25, remaining)))
                         except FutureTimeout:
                             if future.done():
-                                try:
-                                    result = future.result(timeout=0)
-                                except Exception as real_exc:
-                                    self.send_payload(409, {"ok": False, "message": str(real_exc) or "操作超时"})
-                                else:
-                                    self.send_payload(200, result)
+                                send_control_result(future)
                                 break
                             if not owner._accepting.is_set():
                                 self.send_payload(503, {"ok": False, "message": "手机遥控已关闭，请在电脑端确认操作状态"})
+                                break
+                            if not hmac.compare_digest(self._pairing_token, owner.token):
+                                self.send_payload(401, {"ok": False, "message": "配对已重置，请使用电脑中的新链接重新连接"})
                                 break
                             # The controller refreshes the frame rate after dispatch.
                             # Extend the wait if that changes its confirmation budget.
                             if time.monotonic() - started < owner.controller.control_timeout:
                                 continue
                             cancelled = future.cancel()
+                            if not cancelled and future.done():
+                                send_control_result(future)
+                                break
                             message = "操作已取消，请稍后重试" if cancelled else "操作结果尚未确认，请查看 OBS 当前状态后再操作"
                             self.send_payload(504, {"ok": False, "message": message})
                             break
@@ -221,6 +317,8 @@ class RemoteServer:
                             self.send_payload(409, {"ok": False, "message": str(exc)})
                             break
                         else:
+                            if isinstance(result, dict) and "state" in result:
+                                result = {**result, "state": _public_state(result["state"])}
                             self.send_payload(200, result)
                             break
                 elif path == "/api/sound":
@@ -231,7 +329,7 @@ class RemoteServer:
                         accepted, _ = self.dispatch_operation(lambda: owner.controller.set_sound_enabled(data["enabled"]))
                         if not accepted:
                             return
-                        self.send_payload(200, {"ok": True, "state": owner.controller.snapshot()})
+                        self.send_payload(200, {"ok": True, "state": _public_state(owner.controller.snapshot())})
                     except OSError:
                         self.send_payload(500, {"ok": False, "message": "提示音设置保存失败，请在电脑检查"})
                 elif path == "/api/unpair":

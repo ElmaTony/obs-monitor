@@ -277,6 +277,34 @@ async function stoppedRecordingUpdatesClockLabelAndThresholdFormatting() {
   assert.equal(h.ids.clockLabel.textContent,'录制时长');
 }
 
+async function getRequestsOmitContentTypeAndPostIncludesJson() {
+  const h=harness();
+  const statusReq=h.pending('/api/status');
+  assert.equal(statusReq.options.headers['Content-Type'],undefined);
+  await h.respond(statusReq,state());
+  const click=h.button('pause').listeners.click();
+  const ctrlReq=h.pending('/api/control');
+  assert.equal(ctrlReq.options.headers['Content-Type'],'application/json');
+  await h.respond(ctrlReq,{ok:true,message:'暂停成功',state:state(2,true)});await click;
+}
+
+async function clientValidationErrorPreservesMessageInToast() {
+  const h=harness();await h.initial();
+  const click=h.button('pause').listeners.click();
+  const cmd=h.pending('/api/control');cmd.done=true;
+  cmd.resolve({ok:true,status:200,json:async()=>{throw new SyntaxError('bad json');}});
+  await click;
+  assert.equal(h.ids.toast.textContent,'电脑返回的数据格式无效');
+}
+
+async function offlineBeforeFirstSampleDoesNotClaimPreviousData() {
+  const h=harness();
+  const req=h.pending('/api/status');req.done=true;
+  req.reject(Error('offline'));await flush();
+  assert.equal(h.ids.sizeHint.textContent,'等待重新连接电脑');
+  assert.ok(!h.ids.sizeHint.textContent.includes('上次有效数据'));
+}
+
 module.exports = {harness, state, flush};
 if (require.main === module) (async()=>{
   let failed=0;
@@ -287,7 +315,9 @@ if (require.main === module) (async()=>{
     slowControlUsesTheDesktopConfirmationBudget,pendingControlKeepsRecordingMetricsLive,
     controlTimeoutAdaptsToRefreshedConfirmationBudget,initialNoSampleDoesNotAppendPreviousDataLabel,
     nonJsonErrorResponseShowsFallbackMessage,disabledSizeAlertDoesNotTurnProgressBarRed,
-    networkFailureDuringControlAndSoundShowsLocalizedToast,stoppedRecordingUpdatesClockLabelAndThresholdFormatting]) {
+    networkFailureDuringControlAndSoundShowsLocalizedToast,stoppedRecordingUpdatesClockLabelAndThresholdFormatting,
+    getRequestsOmitContentTypeAndPostIncludesJson,clientValidationErrorPreservesMessageInToast,
+    offlineBeforeFirstSampleDoesNotClaimPreviousData]) {
     try {await test();console.log('PASS',test.name);} catch(error){failed++;console.error('FAIL',test.name,error.message);}
   }
   if(failed) process.exitCode=1;

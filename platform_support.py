@@ -1,4 +1,5 @@
 from __future__ import annotations
+import array
 import ctypes
 from ctypes import wintypes
 import json
@@ -6,7 +7,7 @@ import math
 import os
 from functools import lru_cache
 from pathlib import Path
-import struct
+import sys
 import tempfile
 import wave
 import winsound
@@ -66,6 +67,8 @@ def detect_obs_websocket_settings() -> tuple[str, int, str]:
             continue
         enabled = raw.get("server_enabled", raw.get("enabled", True))
         if not enabled:
+            if path == candidates[0]:
+                return "127.0.0.1", 4455, ""
             continue
         raw_port = raw.get("server_port", raw.get("port", 4455))
         port = 4455
@@ -145,10 +148,15 @@ class WindowsCredentialStore:
             raise OSError(error, "无法读取 Windows 连接凭据")
         try:
             credential = pointer.contents
+            if not credential.CredentialBlob or not credential.CredentialBlobSize:
+                return ""
             blob = ctypes.string_at(
                 credential.CredentialBlob, credential.CredentialBlobSize
             )
-            return blob.decode("utf-16-le").rstrip("\x00")
+            try:
+                return blob.decode("utf-16-le").rstrip("\x00")
+            except UnicodeDecodeError as exc:
+                raise ValueError("Windows 连接凭据数据已损坏") from exc
         finally:
             self._advapi32.CredFree(pointer)
 
@@ -157,6 +165,8 @@ class WindowsCredentialStore:
             self.delete()
             return
         blob = password.encode("utf-16-le")
+        if len(blob) > 2560:
+            raise ValueError("连接凭据过长，无法保存到 Windows 凭据管理器")
         buffer = (ctypes.c_byte * len(blob)).from_buffer_copy(blob)
         credential = self.CREDENTIALW()
         credential.Type = self.CRED_TYPE_GENERIC
@@ -198,11 +208,30 @@ class AudioPlayer:
     }
 
     def __init__(self) -> None:
+        self._verified: dict[Path, tuple[int, int]] = {}
         SOUND_DIR.mkdir(parents=True, exist_ok=True)
-        for name, recipe in self.SOUND_RECIPES.items():
-            path = SOUND_DIR / f"{name}.wav"
-            if not self._valid_tone(path):
-                self._write_tone(path, recipe)
+        for name in self.SOUND_RECIPES:
+            self._ensure_tone(name, SOUND_DIR / f"{name}.wav")
+
+    def _ensure_tone(self, name: str, path: Path) -> None:
+        try:
+            stat = path.stat()
+            stamp = (stat.st_mtime_ns, stat.st_size)
+        except OSError:
+            stamp = None
+        if stamp is not None and self._verified.get(path) == stamp:
+            return
+        if stamp is not None and self._valid_tone(path):
+            self._verified[path] = stamp
+            return
+        if name in self.SOUND_RECIPES:
+            SOUND_DIR.mkdir(parents=True, exist_ok=True)
+            self._write_tone(path, self.SOUND_RECIPES[name])
+            try:
+                stat = path.stat()
+                self._verified[path] = (stat.st_mtime_ns, stat.st_size)
+            except OSError:
+                self._verified.pop(path, None)
 
     @staticmethod
     def _valid_tone(path):
@@ -219,24 +248,27 @@ class AudioPlayer:
     @staticmethod
     def _write_tone(path: Path, recipe: list[tuple[float, float]]) -> None:
         sample_rate = 44100
-        samples = bytearray()
+        sin = math.sin
+        tau = 2 * math.pi
+        attack_samples = max(1, sample_rate * 0.008)
+        release_samples = max(1, sample_rate * 0.018)
+        samples = array.array("h")
         for frequency, duration in recipe:
             count = int(sample_rate * duration)
+            if frequency <= 0:
+                samples.extend(0 for _ in range(count))
+                continue
             for index in range(count):
-                if frequency <= 0:
-                    value = 0.0
-                else:
-                    position = index / sample_rate
-                    attack = min(1.0, index / max(1, sample_rate * 0.008))
-                    release = min(1.0, (count - index) / max(1, sample_rate * 0.018))
-                    envelope = attack * release
-                    wave_value = math.sin(2 * math.pi * frequency * position)
-                    wave_value += 0.16 * math.sin(
-                        2 * math.pi * frequency * 2 * position
-                    )
-                    value = 0.32 * envelope * wave_value
-                integer = max(-32767, min(32767, int(value * 32767)))
-                samples.extend(struct.pack("<h", integer))
+                position = index / sample_rate
+                attack = min(1.0, index / attack_samples)
+                release = min(1.0, (count - index) / release_samples)
+                envelope = attack * release
+                phase = tau * frequency * position
+                wave_value = sin(phase) + 0.16 * sin(2 * phase)
+                value = 0.32 * envelope * wave_value
+                samples.append(max(-32767, min(32767, int(value * 32767))))
+        if sys.byteorder != "little":
+            samples.byteswap()
 
         handle, filename = tempfile.mkstemp(prefix=f".{path.stem}-", suffix=".tmp", dir=path.parent)
         os.close(handle)
@@ -246,16 +278,18 @@ class AudioPlayer:
                 output.setnchannels(1)
                 output.setsampwidth(2)
                 output.setframerate(sample_rate)
-                output.writeframes(samples)
+                output.writeframes(samples.tobytes())
             temporary.replace(path)
         finally:
-            temporary.unlink(missing_ok=True)
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
 
     def play(self, name: str) -> None:
         path = SOUND_DIR / f"{name}.wav"
-        if name in self.SOUND_RECIPES and not self._valid_tone(path):
-            SOUND_DIR.mkdir(parents=True, exist_ok=True)
-            self._write_tone(path, self.SOUND_RECIPES[name])
+        if name in self.SOUND_RECIPES:
+            self._ensure_tone(name, path)
         winsound.PlaySound(
             str(path), winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_NODEFAULT
         )
