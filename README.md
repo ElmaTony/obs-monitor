@@ -11,7 +11,7 @@
   <p>实时掌握录制时长与真实输出字节数，手机扫码即可随手开始、暂停、继续或结束录制。</p>
 
   <p>
-    <a href="#下载"><strong>下载 v2.3.1</strong></a> ·
+    <a href="#下载"><strong>下载 v2.3.2</strong></a> ·
     <a href="#界面预览">界面预览</a> ·
     <a href="#快速开始">快速开始</a> ·
     <a href="#常见问题">常见问题</a> ·
@@ -92,18 +92,18 @@
 
 ## 下载
 
-当前稳定版本：**v2.3.1**（所有安装包均已内置完整运行环境，无需安装 Python）。
+当前稳定版本：**v2.3.2**（所有安装包均已内置完整运行环境，无需安装 Python）。
 
 | 平台 | 安装版（推荐） | 便携版（免安装） | 单文件 EXE |
 | --- | --- | --- | --- |
-| **Windows x64**（Intel / AMD） | [下载 Setup](https://github.com/ElmaTony/obs-monitor/releases/download/v2.3.1/obs-monitor-2.3.1-windows-x64-setup.exe) | [下载 ZIP](https://github.com/ElmaTony/obs-monitor/releases/download/v2.3.1/obs-monitor-2.3.1-windows-x64-portable.zip) | [下载 EXE](https://github.com/ElmaTony/obs-monitor/releases/download/v2.3.1/obs-monitor-2.3.1-windows-x64.exe) |
-| **Windows ARM64**（ARM 设备） | [下载 Setup](https://github.com/ElmaTony/obs-monitor/releases/download/v2.3.1/obs-monitor-2.3.1-windows-arm64-setup.exe) | [下载 ZIP](https://github.com/ElmaTony/obs-monitor/releases/download/v2.3.1/obs-monitor-2.3.1-windows-arm64-portable.zip) | [下载 EXE](https://github.com/ElmaTony/obs-monitor/releases/download/v2.3.1/obs-monitor-2.3.1-windows-arm64.exe) |
+| **Windows x64**（Intel / AMD） | [下载 Setup](https://github.com/ElmaTony/obs-monitor/releases/download/v2.3.2/obs-monitor-2.3.2-windows-x64-setup.exe) | [下载 ZIP](https://github.com/ElmaTony/obs-monitor/releases/download/v2.3.2/obs-monitor-2.3.2-windows-x64-portable.zip) | [下载 EXE](https://github.com/ElmaTony/obs-monitor/releases/download/v2.3.2/obs-monitor-2.3.2-windows-x64.exe) |
+| **Windows ARM64**（ARM 设备） | [下载 Setup](https://github.com/ElmaTony/obs-monitor/releases/download/v2.3.2/obs-monitor-2.3.2-windows-arm64-setup.exe) | [下载 ZIP](https://github.com/ElmaTony/obs-monitor/releases/download/v2.3.2/obs-monitor-2.3.2-windows-arm64-portable.zip) | [下载 EXE](https://github.com/ElmaTony/obs-monitor/releases/download/v2.3.2/obs-monitor-2.3.2-windows-arm64.exe) |
 
 - **安装版**：自动创建开始菜单快捷方式并提供标准卸载入口。
 - **便携版**：解压至任意目录即可运行，适合多设备拷贝或免安装使用。
 - **单文件 EXE**：单个可执行文件即开即用，无需解压。
 
-[完整发行源码](https://github.com/ElmaTony/obs-monitor/releases/download/v2.3.1/obs-monitor-2.3.1-source.zip) · [SHA-256 校验清单](https://github.com/ElmaTony/obs-monitor/releases/download/v2.3.1/SHA256SUMS.txt) · [全部历史版本](https://github.com/ElmaTony/obs-monitor/releases)
+[完整发行源码](https://github.com/ElmaTony/obs-monitor/releases/download/v2.3.2/obs-monitor-2.3.2-source.zip) · [SHA-256 校验清单](https://github.com/ElmaTony/obs-monitor/releases/download/v2.3.2/SHA256SUMS.txt) · [全部历史版本](https://github.com/ElmaTony/obs-monitor/releases)
 
 > **运行要求**：Windows 10 / 11 x64 或 Windows 11 ARM64，以及支持 **WebSocket v5** 的 OBS Studio（OBS 28 及以上版本已内置）。
 
@@ -232,12 +232,12 @@ node test_mobile_races.cjs
 node test_mobile_pairing.cjs
 ```
 
-- 自动化测试涵盖 148 项 Python 测试与 42 项手机脚本测试，覆盖录制控制、状态确认、极低帧率编码器收尾、原始字节计数、声音开关、设置校验、持久配对、断网恢复、桌面 UI 交互与乱序请求竞争。
+- 自动化测试涵盖 172 项 Python 测试与 45 项手机脚本测试，覆盖录制控制、状态确认、极低帧率编码器收尾、原始字节计数、声音开关、设置校验、持久配对、断网恢复、桌面 UI 交互与乱序请求竞争。
 - 源码在 Windows x64 与 ARM64 环境下执行 [GitHub Actions 自动检查](https://github.com/ElmaTony/obs-monitor/actions)；所有正式发行包均在对应原生架构运行器上完成模拟 OBS WebSocket v5 联调、单实例检测与安装卸载冒烟验收。
 - 实机基线：2026-11-16 在 Windows x64 真实 OBS Studio 33.0.1（1080p60 / NVENC H.264 / MKV）与安卓 Chrome 上完成两端控制、原始字节计数、无参数复连、重启保配对及每 6 秒一帧极限收尾实测。
 
 ### 自行构建发行包
-完整发行源码包（`obs-monitor-2.3.1-source.zip`）附带打包脚本与 `BUILDING.md`，可在原生 x64 或 ARM64 Windows 环境中构建安装版、便携版与单文件程序。
+完整发行源码包（`obs-monitor-2.3.2-source.zip`）附带打包脚本与 `BUILDING.md`，可在原生 x64 或 ARM64 Windows 环境中构建安装版、便携版与单文件程序。
 
 协作与安全说明详见 [CONTRIBUTING.md](CONTRIBUTING.md) 与 [SECURITY.md](SECURITY.md)。
 

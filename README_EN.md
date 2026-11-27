@@ -11,7 +11,7 @@
   <p>Track recording duration and real-time output bytes live, and start, pause, resume, or stop recordings from your phone by scanning a QR code.</p>
 
   <p>
-    <a href="#download"><strong>Download v2.3.1</strong></a> ·
+    <a href="#download"><strong>Download v2.3.2</strong></a> ·
     <a href="#screenshots">Screenshots</a> ·
     <a href="#quick-start">Quick Start</a> ·
     <a href="#faq">FAQ</a> ·
@@ -92,18 +92,18 @@
 
 ## Download
 
-Current stable release: **v2.3.1** (all packages bundle the full runtime; no Python installation required).
+Current stable release: **v2.3.2** (all packages bundle the full runtime; no Python installation required).
 
 | Platform | Installer (Recommended) | Portable (ZIP) | Single-File EXE |
 | --- | --- | --- | --- |
-| **Windows x64** (Intel / AMD) | [Download Setup](https://github.com/ElmaTony/obs-monitor/releases/download/v2.3.1/obs-monitor-2.3.1-windows-x64-setup.exe) | [Download ZIP](https://github.com/ElmaTony/obs-monitor/releases/download/v2.3.1/obs-monitor-2.3.1-windows-x64-portable.zip) | [Download EXE](https://github.com/ElmaTony/obs-monitor/releases/download/v2.3.1/obs-monitor-2.3.1-windows-x64.exe) |
-| **Windows ARM64** (ARM PCs) | [Download Setup](https://github.com/ElmaTony/obs-monitor/releases/download/v2.3.1/obs-monitor-2.3.1-windows-arm64-setup.exe) | [Download ZIP](https://github.com/ElmaTony/obs-monitor/releases/download/v2.3.1/obs-monitor-2.3.1-windows-arm64-portable.zip) | [Download EXE](https://github.com/ElmaTony/obs-monitor/releases/download/v2.3.1/obs-monitor-2.3.1-windows-arm64.exe) |
+| **Windows x64** (Intel / AMD) | [Download Setup](https://github.com/ElmaTony/obs-monitor/releases/download/v2.3.2/obs-monitor-2.3.2-windows-x64-setup.exe) | [Download ZIP](https://github.com/ElmaTony/obs-monitor/releases/download/v2.3.2/obs-monitor-2.3.2-windows-x64-portable.zip) | [Download EXE](https://github.com/ElmaTony/obs-monitor/releases/download/v2.3.2/obs-monitor-2.3.2-windows-x64.exe) |
+| **Windows ARM64** (ARM PCs) | [Download Setup](https://github.com/ElmaTony/obs-monitor/releases/download/v2.3.2/obs-monitor-2.3.2-windows-arm64-setup.exe) | [Download ZIP](https://github.com/ElmaTony/obs-monitor/releases/download/v2.3.2/obs-monitor-2.3.2-windows-arm64-portable.zip) | [Download EXE](https://github.com/ElmaTony/obs-monitor/releases/download/v2.3.2/obs-monitor-2.3.2-windows-arm64.exe) |
 
 - **Installer**: Creates Start Menu shortcuts and registers a standard uninstaller.
 - **Portable**: Extract anywhere and run immediately—great for USB drives or zero-install setups.
 - **Single-File EXE**: Standalone executable ready to launch without extraction.
 
-[Complete Release Source](https://github.com/ElmaTony/obs-monitor/releases/download/v2.3.1/obs-monitor-2.3.1-source.zip) · [SHA-256 Checksums](https://github.com/ElmaTony/obs-monitor/releases/download/v2.3.1/SHA256SUMS.txt) · [All Releases](https://github.com/ElmaTony/obs-monitor/releases)
+[Complete Release Source](https://github.com/ElmaTony/obs-monitor/releases/download/v2.3.2/obs-monitor-2.3.2-source.zip) · [SHA-256 Checksums](https://github.com/ElmaTony/obs-monitor/releases/download/v2.3.2/SHA256SUMS.txt) · [All Releases](https://github.com/ElmaTony/obs-monitor/releases)
 
 > **Requirements**: Windows 10 / 11 x64 or Windows 11 ARM64, and OBS Studio with **WebSocket v5** support (built into OBS 28+).
 
@@ -232,12 +232,12 @@ node test_mobile_races.cjs
 node test_mobile_pairing.cjs
 ```
 
-- Automated tests include 148 Python unit/UI tests and 42 mobile script tests covering recording controls, state confirmation, fractional-FPS encoder drain handling, raw output bytes, sound cues, settings validation, persistent pairing, reconnection, desktop UI regressions, and out-of-order request races.
+- Automated tests include 172 Python unit/UI tests and 45 mobile script tests covering recording controls, state confirmation, fractional-FPS encoder drain handling, raw output bytes, sound cues, settings validation, persistent pairing, reconnection, desktop UI regressions, and out-of-order request races.
 - Source code is checked automatically on native Windows x64 and ARM64 runners via [GitHub Actions](https://github.com/ElmaTony/obs-monitor/actions); release builds undergo simulated OBS WebSocket v5 integration checks, single-instance tests, and silent install/uninstall smoke tests on both architectures.
 - Real-hardware baseline: Verified on 2026-11-16 on Windows x64 with OBS Studio 33.0.1 (1080p60 / NVENC H.264 / MKV) and Android Chrome across all four controls, raw output byte parity, cookie-based reconnection, pairing persistence across restarts, and 1-frame-per-6-seconds stop drain.
 
 ### Build Release Packages
-The complete release source archive (`obs-monitor-2.3.1-source.zip`) includes `BUILDING.md` and packaging scripts to build native x64 and ARM64 installers, portable archives, and single-file executables on Windows.
+The complete release source archive (`obs-monitor-2.3.2-source.zip`) includes `BUILDING.md` and packaging scripts to build native x64 and ARM64 installers, portable archives, and single-file executables on Windows.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md) for contribution guidelines and security reporting.
 
