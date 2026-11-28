@@ -153,7 +153,7 @@
       </div>
       <div id="exactSize" class="exact">尚未收到 OBS 数据</div>
       <div class="track"><div id="fill" class="fill"></div></div>
-      <div id="sizeHint" class="hint">从 OBS 直接读取，每 0.8 秒刷新</div>
+      <div id="sizeHint" class="hint">OBS 累计输出量，每 0.8 秒刷新</div>
     </div>
   </section>
 
@@ -326,13 +326,14 @@
     $('exactSize').textContent = current.size_exact_text + (live || current.data_age_ms === null ? '' : ' · 上次有效数据');
     $('hero').classList.toggle('live', live && current.active && !current.paused);
     $('hero').classList.toggle('paused', live && current.paused);
-    const gb = Number((current.threshold_bytes / 1073741824).toFixed(1));
+    const rawGb = Number.isFinite(current.threshold_gb) ? current.threshold_gb : current.threshold_bytes / 1073741824;
+    const gb = Number(rawGb.toFixed(1));
     $('limit').textContent = current.alert_enabled ? `提醒于 ${gb.toLocaleString()} GB` : '大小提醒已关闭';
     const percent = current.alert_enabled ? Math.min(100, current.bytes / Math.max(1, current.threshold_bytes) * 100) : 0;
     $('fill').style.width = percent + '%';
     const barColor = !live ? 'var(--muted)' : current.paused ? 'var(--warning)' : current.active ? 'var(--red)' : 'var(--accent)';
     $('fill').style.background = current.alert_enabled ? (percent >= 100 ? 'var(--red)' : barColor) : 'var(--muted)';
-    $('sizeHint').textContent = !live ? '数据已过期，等待重新连接 OBS' : current.alerted ? '本次录制已触发大小提醒' :
+    $('sizeHint').textContent = !live ? '数据已过期，等待重新连接 OBS' : (current.alert_enabled && current.alerted) ? '本次录制已触发大小提醒' :
       !current.active && current.bytes > 0 ? '上次录制数据 · 开始新录制后重置' : 'OBS 累计输出量，每 0.8 秒刷新';
     if (!soundBusy) $('sound').checked = current.sound_enabled;
     $('sound').disabled = soundBusy || pairingBusy;
@@ -369,7 +370,7 @@
     $('sizeHint').textContent = hadSample ? '等待重新连接，当前显示上次有效数据' : '等待重新连接电脑';
     $('pairConnect').disabled = false;
     $('pairConnect').textContent = '连接电脑';
-    $('retry').hidden = false;
+    $('retry').hidden = !$('pairing').hidden;
     enableButtons();
     notice(message || '无法连接电脑，请检查 Wi-Fi 和电脑软件是否开启。');
   }
@@ -411,6 +412,7 @@
         if (generation !== statusGeneration || error.obsolete) return;
         pollFailures++;
         if (error.status === 401) requirePairing(error.message);
+        else if (pendingControl) updateView();
         else offline(error.name === 'AbortError' ? '连接超时，正在重试…' : error.status ? error.message : '暂时无法连接电脑，恢复网络后会自动重连。');
       } finally {
         if (generation === statusGeneration) {
@@ -486,14 +488,24 @@
   $('retry').addEventListener('click', () => {stopped = false; pollFailures = 0; void poll(true);});
   function connectByLink() {
     try {
+      const raw = $('pairLink').value.trim();
       let link;
       try {
-        link = new URL($('pairLink').value.trim(), location.href);
+        if (raw.startsWith('#')) {
+          link = new URL(raw, location.href);
+        } else if (/^https?:\/\//i.test(raw)) {
+          link = new URL(raw);
+        } else if (/^[A-Za-z0-9.-]+:\d+(?:\/|\?|#|$)/.test(raw)) {
+          link = new URL('http://' + raw);
+        } else {
+          throw new Error('invalid');
+        }
       } catch {
         throw new Error('请输入电脑工具“复制链接”得到的完整地址。');
       }
       const nextToken = new URLSearchParams(link.hash.slice(1)).get('token');
       if (link.origin !== location.origin) throw new Error('链接地址与当前电脑不同，请直接打开粘贴的完整链接。');
+      if (link.pathname !== '/' && link.pathname !== location.pathname) throw new Error('请输入电脑工具“复制链接”得到的完整地址。');
       if (!nextToken || !/^[A-Za-z0-9_-]{32,128}$/.test(nextToken)) throw new Error('请输入电脑工具“复制链接”得到的完整地址。');
       notice('');
       $('pairConnect').disabled = true;

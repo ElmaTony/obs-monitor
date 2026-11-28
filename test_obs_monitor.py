@@ -38,6 +38,33 @@ class FakeSocket:
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_format_size_promotes_unit_when_rounding_reaches_1024(self):
+        self.assertEqual(core.format_size(1023), "1023 B")
+        self.assertEqual(core.format_size(1024), "1.00 KB")
+        self.assertEqual(core.format_size(1024 * 1024 - 5), "1.00 MB")
+        self.assertEqual(core.format_size(1024**3 - 5120), "1.00 GB")
+
+    def test_close_frame_4009_reports_authentication_failure(self):
+        import struct
+        import websocket
+        from websockets.sync.server import serve
+
+        def handler(connection):
+            connection.send(json.dumps({"op": 0, "d": {"rpcVersion": 1, "obsWebSocketVersion": "5.6.0", "authentication": {"salt": "s", "challenge": "c"}}}))
+            connection.recv()
+            connection.close(code=4009, reason="Authentication failed.")
+
+        server = serve(handler, "127.0.0.1", 0)
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        try:
+            client = core.OBSWebSocketClient("127.0.0.1", server.socket.getsockname()[1], "wrong-password")
+            with self.assertRaisesRegex(core.OBSRequestError, "密码"):
+                client.connect()
+        finally:
+            server.shutdown()
+            worker.join(timeout=2)
+
     def test_frame_interval_uses_fractional_video_rate(self):
         client = core.OBSWebSocketClient("127.0.0.1", 4455, "")
         with patch.object(client, "request", return_value={"fpsNumerator": 30000, "fpsDenominator": 1001}):
@@ -199,6 +226,131 @@ class FakeOBS:
 
 
 class ControllerTests(unittest.TestCase):
+    def test_boundary_flip_control_timeout_covers_full_settling_window_and_recovers_after_idle(self):
+        clock = [0.0]
+        observed_busy_timeouts = []
+        self.fake.active = True
+        self.fake.get_frame_interval = lambda: 6.0  # _settle=18s, _drain=384s
+        self.controller._client = self.fake
+        original_status = self.fake.get_record_status
+
+        def status():
+            if self.fake.requests and clock[0] < 384.0:
+                return {"outputActive": True, "outputPaused": False, "outputBytes": 1000, "outputDuration": 1000}
+            return original_status()
+
+        def advance(seconds):
+            observed_busy_timeouts.append(self.controller.control_timeout)
+            clock[0] += seconds
+            return False
+
+        self.fake.get_record_status = status
+        future = Future()
+        with patch.object(core.time, "monotonic", side_effect=lambda: clock[0]), \
+             patch.object(self.controller._stop, "wait", side_effect=advance):
+            self.controller._execute("stop", future, 0.0)
+        self.assertTrue(future.result()["ok"])
+        # During busy transition, timeout must exceed flip_deadline + 2 * _settle_seconds (384 + 36 = 420s).
+        self.assertTrue(all(t >= 420.0 for t in observed_busy_timeouts))
+        self.assertLess(self.controller.control_timeout, 40.0)
+
+    def test_raising_threshold_or_disabling_alert_resets_alerted_state(self):
+        self.controller._observe({"outputActive": True, "outputBytes": 200 * 1024**2, "outputDuration": 2000})
+        self.assertTrue(self.controller.snapshot()["alerted"])
+        raised = settings.AppConfig(threshold_gb=1.0, alert_enabled=True)
+        with patch.object(raised, "save"):
+            self.controller.apply_connection_config(raised)
+        self.assertFalse(self.controller.snapshot()["alerted"])
+        self.controller._observe({"outputActive": True, "outputBytes": 1100 * 1024**2, "outputDuration": 4000})
+        self.assertTrue(self.controller.snapshot()["alerted"])
+        self.assertEqual(len([k for k, _ in self.events if k == "size_alert"]), 2)
+        disabled = settings.AppConfig(threshold_gb=1.0, alert_enabled=False)
+        with patch.object(disabled, "save"):
+            self.controller.apply_connection_config(disabled)
+        self.assertFalse(self.controller.snapshot()["alerted"])
+
+    def test_external_stop_during_pause_confirmation_emits_stop_and_fails_promptly(self):
+        clock = [0.0]
+        self.fake.active = True
+        self.fake.paused = False
+        self.fake.get_frame_interval = lambda: 2.0  # base_deadline would wait > 10s
+        self.controller._client = self.fake
+        self.fake.request = lambda name: self.fake.requests.append(name) or {}
+
+        def external_stop():
+            return {"outputActive": False, "outputPaused": False, "outputBytes": 5000, "outputDuration": 3000}
+
+        self.fake.get_record_status = lambda: {"outputActive": True, "outputPaused": False, "outputBytes": 4000, "outputDuration": 2000}
+        # Switch status to stopped right after PauseRecord request is issued.
+        original_request = self.fake.request
+        def request_then_stop(name):
+            res = original_request(name)
+            self.fake.get_record_status = external_stop
+            return res
+        self.fake.request = request_then_stop
+        future = Future()
+        with patch.object(core.time, "monotonic", side_effect=lambda: clock[0]):
+            self.controller._execute("pause", future, 0.0)
+        with self.assertRaisesRegex(core.OBSRequestError, "已结束"):
+            future.result()
+        self.assertEqual([p for k, p in self.events if k == "action"], ["stop"])
+        self.assertEqual(clock[0], 0.0)
+
+    def test_apply_connection_config_blocks_concurrent_commands_while_saving(self):
+        entered, release = threading.Event(), threading.Event()
+        self.connected()
+        candidate = settings.AppConfig(obs_port=4567)
+
+        def slow_save(save_password=True):
+            entered.set()
+            release.wait(2)
+
+        with patch.object(candidate, "save", side_effect=slow_save):
+            worker = threading.Thread(target=lambda: self.controller.apply_connection_config(candidate))
+            worker.start()
+            try:
+                self.assertTrue(entered.wait(1))
+                pending = self.controller.submit("start")
+                time.sleep(0.05)
+                self.assertEqual(self.fake.requests, [])
+            finally:
+                release.set()
+                worker.join(2)
+        with self.assertRaises(ConnectionError):
+            pending.result(timeout=1)
+
+    def test_observe_never_invokes_callback_while_holding_controller_lock(self):
+        lock_free = []
+
+        def check_lock(kind, payload):
+            acquired = []
+            probe = threading.Thread(target=lambda: (
+                acquired.append(self.controller._lock.acquire(blocking=False)),
+                acquired[0] and self.controller._lock.release(),
+            ))
+            probe.start()
+            probe.join(1)
+            lock_free.append((kind, acquired[0]))
+
+        self.controller.on_event = check_lock
+        self.controller._client = self.fake
+        future = Future()
+        self.controller._execute("start", future, time.monotonic())
+        future.result(timeout=2)
+        self.assertTrue(lock_free)
+        self.assertTrue(all(free for _, free in lock_free))
+
+    def test_snapshot_caches_formatted_text_when_counters_unchanged(self):
+        self.controller._observe({"outputActive": True, "outputBytes": 123456, "outputDuration": 5000})
+        with patch.object(core, "format_size", wraps=core.format_size) as fmt_size, \
+             patch.object(core, "format_duration", wraps=core.format_duration) as fmt_dur:
+            first = self.controller.snapshot()
+            second = self.controller.snapshot()
+        self.assertEqual(fmt_size.call_count, 1)
+        self.assertEqual(fmt_dur.call_count, 1)
+        self.assertEqual(first["size_text"], second["size_text"])
+        self.assertEqual(first["duration_text"], second["duration_text"])
+
     def test_closing_while_confirmation_arrives_cannot_restore_connected_state(self):
         self.controller._client = self.fake
         original = self.fake.get_record_status
@@ -754,6 +906,61 @@ class ControllerTests(unittest.TestCase):
 
 
 class SettingsTests(unittest.TestCase):
+    def test_empty_appdata_falls_back_to_home_directory(self):
+        import importlib.util
+        import os
+        spec = importlib.util.spec_from_file_location("_platform_support_sandbox", Path(__file__).parent / "platform_support.py")
+        module = importlib.util.module_from_spec(spec)
+        with patch.dict(os.environ, {"APPDATA": ""}, clear=False):
+            spec.loader.exec_module(module)
+        self.assertEqual(module.APP_DIR, Path.home() / "OBSAudioMonitor")
+        self.assertTrue(module.APP_DIR.is_absolute())
+
+    def test_load_avoids_self_connection_when_obs_and_remote_ports_match(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(settings, "CONFIG_PATH", Path(tmp) / "config.json"), \
+             patch.object(settings, "detect_obs_websocket_settings", return_value=("127.0.0.1", 8765, "")), \
+             patch.object(settings, "WindowsCredentialStore") as store:
+            store.return_value.read.return_value = ""
+            settings.CONFIG_PATH.write_text(json.dumps({"obs_host": "127.0.0.1", "obs_port": 8765, "remote_port": 8765, "remote_enabled": True}), encoding="utf-8")
+            loaded = settings.AppConfig.load()
+            self.assertNotEqual(loaded.obs_port, loaded.remote_port)
+            self.assertEqual(loaded.remote_port, 8766)
+
+    def test_validate_obs_host_rejects_percent_zone_id(self):
+        with self.assertRaises(ValueError):
+            settings.validate_obs_host("fe80::1%12")
+
+    def test_lan_addresses_falls_back_to_private_probes_and_getaddrinfo_when_hosts_is_loopback(self):
+        from remote_server import lan_addresses
+        def fake_connect(addr):
+            if addr[0] == "192.0.2.1":
+                raise OSError("no internet")
+        sock = MagicMock()
+        sock.__enter__.return_value.connect.side_effect = fake_connect
+        sock.__enter__.return_value.getsockname.return_value = ("192.168.50.10", 12345)
+        with patch("remote_server.socket.socket", return_value=sock), \
+             patch("remote_server.socket.gethostbyname_ex", return_value=("pc", [], ["127.0.0.1"])):
+            self.assertEqual(lan_addresses(), ["192.168.50.10"])
+        offline_sock = MagicMock()
+        offline_sock.__enter__.return_value.connect.side_effect = OSError("unreachable")
+        with patch("remote_server.socket.socket", return_value=offline_sock), \
+             patch("remote_server.socket.gethostbyname_ex", return_value=("pc", [], ["127.0.0.1"])), \
+             patch("remote_server.socket.getaddrinfo", return_value=[(2, 1, 6, "", ("192.168.50.11", 0))]):
+            self.assertEqual(lan_addresses(), ["192.168.50.11"])
+
+    def test_title_bar_theme_caches_attributes_and_skips_unsupported_colors(self):
+        import platform_support
+        calls = []
+        def fake_setter(hwnd, attr, ptr, size):
+            calls.append((hwnd, attr))
+            return 0x80070057 if attr in (35, 36) else 0
+        with patch.object(platform_support, "_dwm_setter", return_value=fake_setter), \
+             patch.object(platform_support, "_TITLE_BAR_CACHE", {}), \
+             patch.object(platform_support, "_UNSUPPORTED_DWM_ATTRS", set()):
+            platform_support.set_title_bar_theme(101, True, "#161514", "#f3efe8")
+            platform_support.set_title_bar_theme(101, True, "#100f0e", "#ffffff")
+        self.assertEqual(calls, [(101, 20), (101, 35), (101, 36)])
+
     def test_default_route_is_preferred_over_virtual_adapter_addresses(self):
         from remote_server import lan_addresses
         with patch('remote_server.socket.socket') as sock, \
@@ -965,6 +1172,33 @@ class SettingsTests(unittest.TestCase):
 
 
 class DesktopTests(unittest.TestCase):
+    def test_occupied_remote_port_does_not_block_saving_obs_settings(self):
+        self.app.remote = None
+        candidate = settings.AppConfig(obs_port=4456, remote_enabled=True, remote_port=8765)
+        with patch.object(self.app, "_create_remote", side_effect=OSError("port in use")), \
+             patch.object(settings.AppConfig, "save"):
+            self.app.apply_settings(candidate)
+        self.assertEqual(self.app.config.obs_port, 4456)
+        self.assertIsNone(self.app.remote)
+
+    def test_disabling_remote_logs_stopped_message(self):
+        self.start_phone()
+        self.app.clear_activity_log()
+        candidate = settings.AppConfig(remote_enabled=False, remote_port=self.config.remote_port)
+        with patch.object(settings.AppConfig, "save"):
+            self.app.apply_settings(candidate)
+        self.assertTrue(any("手机遥控已关闭" in entry[2] for entry in self.app.activity_entries))
+
+    def test_activity_item_sets_display_text_and_qr_cache_reuses_pixmap(self):
+        item = self.app._make_activity_item("12:00:00", "info", "测试记录")
+        self.assertEqual(item.text(), "12:00:00  测试记录")
+        self._fake_phone_service()
+        self.app._known_addresses = ["192.0.2.10"]
+        self.app._sync_remote_ui(discover=False)
+        with patch("desktop_ui.qrcode.QRCode") as qr_cls:
+            self.app._refresh_qr()
+        qr_cls.assert_not_called()
+
     def _fake_phone_service(self):
         self.app.remote = MagicMock()
         self.app.remote.url.side_effect = lambda address: f'http://{address}:8765/#token=test'
@@ -1587,6 +1821,19 @@ class AudioTests(unittest.TestCase):
 
 
 class RemoteTests(unittest.TestCase):
+    def test_head_requests_return_headers_with_empty_body(self):
+        import http.client
+        conn = http.client.HTTPConnection("127.0.0.1", self.server.port, timeout=2)
+        try:
+            conn.request("HEAD", "/")
+            resp = conn.getresponse()
+            body = resp.read()
+            self.assertEqual(resp.status, 200)
+            self.assertGreater(int(resp.getheader("Content-Length")), 0)
+            self.assertEqual(body, b"")
+        finally:
+            conn.close()
+
     def test_incomplete_post_body_cannot_control_recording(self):
         import socket
         body = b'{"action":"start"}'

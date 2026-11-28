@@ -305,6 +305,28 @@ async function offlineBeforeFirstSampleDoesNotClaimPreviousData() {
   assert.ok(!h.ids.sizeHint.textContent.includes('上次有效数据'));
 }
 
+async function pollFailureDuringPendingControlKeepsStateAndControlsPending() {
+  const h=harness();await h.initial();
+  const click=h.button('pause').listeners.click();
+  const ctrl=h.pending('/api/control');
+  const statusReq=h.pending('/api/status');
+  statusReq.done=true;statusReq.reject(Object.assign(Error('timeout'),{name:'AbortError'}));await flush();
+  assert.equal(h.ids.retry.hidden,true);
+  assert.equal(h.ids.commandState.textContent,'正在等待 OBS 确认…');
+  await h.respond(ctrl,{ok:true,message:'暂停录制成功',state:state(3,true)});await click;
+  assert.equal(h.button('resume').disabled,false);
+}
+
+async function disabledAlertClearsAlertedHintAndPrefersThresholdGb() {
+  const h=harness();
+  await h.respond(h.pending('/api/status'),state(1,false,{alert_enabled:false,alerted:true,threshold_gb:0.5,threshold_bytes:Math.floor(0.5*1073741824)}));
+  assert.equal(h.ids.limit.textContent,'大小提醒已关闭');
+  assert.notEqual(h.ids.sizeHint.textContent,'本次录制已触发大小提醒');
+  await h.advance(800);
+  await h.respond(h.pending('/api/status'),state(2,false,{alert_enabled:true,alerted:false,threshold_gb:100000.5,threshold_bytes:Math.floor(100000.5*1073741824)}));
+  assert.equal(h.ids.limit.textContent,'提醒于 100,000.5 GB');
+}
+
 module.exports = {harness, state, flush};
 if (require.main === module) (async()=>{
   let failed=0;
@@ -317,7 +339,8 @@ if (require.main === module) (async()=>{
     nonJsonErrorResponseShowsFallbackMessage,disabledSizeAlertDoesNotTurnProgressBarRed,
     networkFailureDuringControlAndSoundShowsLocalizedToast,stoppedRecordingUpdatesClockLabelAndThresholdFormatting,
     getRequestsOmitContentTypeAndPostIncludesJson,clientValidationErrorPreservesMessageInToast,
-    offlineBeforeFirstSampleDoesNotClaimPreviousData]) {
+    offlineBeforeFirstSampleDoesNotClaimPreviousData,pollFailureDuringPendingControlKeepsStateAndControlsPending,
+    disabledAlertClearsAlertedHintAndPrefersThresholdGb]) {
     try {await test();console.log('PASS',test.name);} catch(error){failed++;console.error('FAIL',test.name,error.message);}
   }
   if(failed) process.exitCode=1;

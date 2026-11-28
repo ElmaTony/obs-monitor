@@ -322,6 +322,23 @@ class SingleInstanceTests(unittest.TestCase):
         finally:
             first.close(); second.close()
 
+    def test_stale_server_socket_is_removed_and_reclaimed(self):
+        from PySide6.QtNetwork import QLocalServer
+        from PySide6.QtWidgets import QApplication
+        from instance_guard import SingleInstance
+        QApplication.instance() or QApplication([])
+        name = "obs-monitor-stale-" + uuid.uuid4().hex
+        guard = SingleInstance(name)
+        try:
+            with patch.object(guard, "_notify_existing", return_value=False), \
+                 patch.object(guard.server, "listen", side_effect=[False, True]) as listen, \
+                 patch.object(QLocalServer, "removeServer") as remove_server:
+                self.assertTrue(guard.claim())
+            remove_server.assert_called_once_with(name)
+            self.assertEqual(listen.call_count, 2)
+        finally:
+            guard.close()
+
 
 if __name__ == "__main__":
     unittest.main()

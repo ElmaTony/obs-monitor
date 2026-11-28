@@ -275,6 +275,26 @@ async function unauthorizedControlTransitionsToPairingWithoutDuplicateToast() {
   assert.equal(h.ids.toast.textContent, '');
 }
 
+async function schemelessForeignHostPortIsRejectedWithoutSendingToken() {
+  const h = harness(false, {hash:''});
+  await h.respond(h.pending('/api/status'), {message:'尚未配对'}, 401);
+  h.ids.pairLink.value = '192.168.1.99:8765/#token='+savedToken;
+  h.ids.pairConnect.listeners.click();
+  assert.equal(h.requests.length, 1);
+  assert.ok(h.ids.notice.textContent.includes('不同'));
+}
+
+async function failedPairingConnectDoesNotShowDuplicateRetryButton() {
+  const h = harness(false, {hash:''});
+  await h.respond(h.pending('/api/status'), {message:'尚未配对'}, 401);
+  h.ids.pairLink.value = 'http://pc:8765/#token='+savedToken;
+  h.ids.pairConnect.listeners.click();
+  const req = h.pending('/api/status'); req.done = true;
+  req.reject(Object.assign(Error('timeout'), {name:'AbortError'})); await flush();
+  assert.equal(h.ids.pairing.hidden, false);
+  assert.equal(h.ids.retry.hidden, true);
+}
+
 (async()=>{
   let failed = 0;
   const tests = [closeAndReopenBrowserAtRoot,cookieOnlyPairingWorksWithBlockedStorage,
@@ -288,7 +308,8 @@ async function unauthorizedControlTransitionsToPairingWithoutDuplicateToast() {
     oldSuccessfulResponseCannotOverwriteStateAfterNewPairing,
     reconnectionUnlocksControlsImmediatelyWhileOldControlStillInFlight,
     forgetReceivingUnauthorizedTransitionsDirectlyToPairing,malformedPairingLinkShowsLocalizedError,
-    enterKeyInPairingInputSubmitsLink,unauthorizedControlTransitionsToPairingWithoutDuplicateToast];
+    enterKeyInPairingInputSubmitsLink,unauthorizedControlTransitionsToPairingWithoutDuplicateToast,
+    schemelessForeignHostPortIsRejectedWithoutSendingToken,failedPairingConnectDoesNotShowDuplicateRetryButton];
   for (const test of tests) {
     try {await test();console.log('PASS',test.name);} catch(error){failed++;console.error('FAIL',test.name,error.message);}
   }

@@ -19,7 +19,7 @@ _save_lock = threading.Lock()
 
 def validate_obs_host(raw_host):
     address = raw_host.strip() or "127.0.0.1"
-    if any(ord(c) < 32 or c.isspace() or c in "/?#@\\" for c in address):
+    if any(ord(c) < 32 or c.isspace() or c in "/?#@\\%" for c in address):
         raise ValueError("OBS 地址请只填写 IP 或主机名")
     if "[" in address or "]" in address or ":" in address:
         candidate = address[1:-1] if address.startswith("[") and address.endswith("]") else address
@@ -94,6 +94,8 @@ class AppConfig:
                     result.threshold_gb = threshold
             except (TypeError, ValueError, OverflowError):
                 pass
+        if result.remote_enabled and result.obs_port == result.remote_port and result.obs_host.casefold() in LOCAL_OBS_HOSTS:
+            result.remote_port = 8765 if result.remote_port != 8765 else 8766
         return result
 
     def save(self, save_password=False):

@@ -445,6 +445,7 @@ class MonitorApp(QMainWindow):
         self._theme_overlays = []
         self._title_colors = None
         self._style_cache = {}
+        self._qr_cache = (None, None)
         self._copy_link_timer = QTimer(self)
         self._copy_link_timer.setSingleShot(True)
         self._copy_link_timer.timeout.connect(lambda: self.copy_button.setText("复制链接"))
@@ -993,7 +994,7 @@ QToolTip {{background:{p['surface']};color:{p['text']};border:1px solid {p['line
         self.events.put((kind, payload))
 
     def _make_activity_item(self, stamp, level, message):
-        item = QListWidgetItem()
+        item = QListWidgetItem(f"{stamp}  {message}")
         item.setData(ActivityDelegate.ROLE_TIME, stamp)
         item.setData(ActivityDelegate.ROLE_LEVEL, level)
         item.setData(ActivityDelegate.ROLE_MESSAGE, message)
@@ -1199,7 +1200,7 @@ QToolTip {{background:{p['surface']};color:{p['text']};border:1px solid {p['line
         self._set_label_text(
             self.limit_label,
             "数据已过期，等待重新连接 OBS" if state["stale"]
-            else "本次录制已触发大小提醒" if state["alerted"]
+            else "本次录制已触发大小提醒" if (state["alert_enabled"] and state["alerted"])
             else "OBS 累计输出量 · 不依赖目录显示大小",
         )
         if self.sound_switch.isChecked() != state["sound_enabled"]:
@@ -1340,10 +1341,12 @@ QToolTip {{background:{p['surface']};color:{p['text']};border:1px solid {p['line
             self._refresh_qr()
         elif self.remote:
             self.mobile_status.setText("等待网络")
+            self._qr_cache = (None, None)
             self.qr_label.setPixmap(QPixmap())
             self.qr_label.setText("正在发现局域网\n请确认已连网")
         else:
             self.mobile_status.setText("未开启")
+            self._qr_cache = (None, None)
             self.qr_label.setPixmap(QPixmap())
             self.qr_label.setText(error)
         self.copy_button.setEnabled(self.remote is not None and bool(self._known_addresses))
@@ -1357,41 +1360,59 @@ QToolTip {{background:{p['surface']};color:{p['text']};border:1px solid {p['line
         remote_changed = (candidate.remote_port, candidate.remote_enabled) != (previous.remote_port, previous.remote_enabled)
         replace_remote = candidate.remote_enabled and (remote_changed or self.remote is None)
         prepared = None
+        remote_retry_error = None
         try:
             # Bind the replacement before saving settings or stopping the working
             # listener. A busy port or failed save must preserve the old service.
             if replace_remote:
-                prepared = self._create_remote(candidate.remote_port)
+                if remote_changed:
+                    prepared = self._create_remote(candidate.remote_port)
+                else:
+                    try:
+                        prepared = self._create_remote(candidate.remote_port)
+                    except (OSError, ValueError) as exc:
+                        remote_retry_error = exc
             self.controller.apply_connection_config(candidate)
         except Exception:
             if prepared:
                 prepared.stop()
             raise
         self.config = candidate
-        if remote_changed or replace_remote:
+        if remote_changed or prepared is not None:
             old, self.remote = self.remote, prepared
             if old:
                 old.stop()
             self._sync_remote_ui()
             if self.remote:
                 self._log(f"手机遥控已开启，网页端口 {self.remote.port}。", level="accent")
+            elif remote_changed and not candidate.remote_enabled:
+                self._log("手机遥控已关闭。", level="info")
+        elif remote_retry_error is not None:
+            error = f"手机遥控启动失败：{remote_retry_error}"
+            self._log(error, level="red")
+            self._sync_remote_ui(error)
         return previous
 
     def _refresh_qr(self, *args):
         if not self.remote or not self.address_combo.currentData():
             return
         p = getattr(self, "palette_values", PALETTES["light"])
+        target_url = self.remote.url(self.address_combo.currentData())
+        cache_key = (target_url, p["qr_fg"], p["qr_bg"])
+        if self._qr_cache[0] == cache_key and self._qr_cache[1] is not None:
+            self.qr_label.setPixmap(self._qr_cache[1])
+            return
         code = qrcode.QRCode(box_size=4, border=2)
-        code.add_data(self.remote.url(self.address_combo.currentData()))
+        code.add_data(target_url)
         code.make(fit=True)
         image = code.make_image(fill_color=p["qr_fg"], back_color=p["qr_bg"]).convert("RGB")
         data = image.tobytes()
         qt_image = QImage(data, image.width, image.height, image.width * 3, QImage.Format.Format_RGB888).copy()
-        self.qr_label.setPixmap(
-            QPixmap.fromImage(qt_image).scaled(
-                104, 104, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.FastTransformation
-            )
+        pixmap = QPixmap.fromImage(qt_image).scaled(
+            104, 104, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.FastTransformation
         )
+        self._qr_cache = (cache_key, pixmap)
+        self.qr_label.setPixmap(pixmap)
 
     def copy_link(self):
         if self.remote and self.address_combo.currentData():

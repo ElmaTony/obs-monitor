@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import queue
+import struct
 import threading
 import time
 import uuid
@@ -34,7 +35,25 @@ class OBSWebSocketClient:
         return base64.b64encode(hashlib.sha256((secret + challenge).encode()).digest()).decode()
 
     def _recv_json(self):
-        raw = self.ws.recv()
+        if isinstance(self.ws, websocket.WebSocket):
+            with self.ws.readlock:
+                opcode, raw_data = self.ws.recv_data()
+            if opcode == websocket.ABNF.OPCODE_CLOSE:
+                if isinstance(raw_data, (bytes, bytearray)) and len(raw_data) >= 2:
+                    code = struct.unpack("!H", raw_data[:2])[0]
+                    if code == 4009:
+                        raise OBSRequestError("OBS 认证失败，请检查密码")
+                    if code in (4006, 4007, 4010, 4011):
+                        raise OBSRequestError(f"OBS WebSocket 握手被拒绝（错误码 {code}）")
+                raise ConnectionError("OBS 连接已断开")
+            if opcode == websocket.ABNF.OPCODE_TEXT:
+                raw = raw_data.decode("utf-8") if isinstance(raw_data, (bytes, bytearray)) else raw_data
+            elif opcode == websocket.ABNF.OPCODE_BINARY:
+                raw = raw_data
+            else:
+                raw = ""
+        else:
+            raw = self.ws.recv()
         if raw is None or raw == "" or raw == b"":
             raise ConnectionError("OBS 连接已断开")
         try:
@@ -145,8 +164,11 @@ class OBSWebSocketClient:
 def format_size(size):
     number = max(0, float(size))
     for unit in ("B", "KB", "MB", "GB", "TB"):
-        if number < 1024 or unit == "TB":
-            return f"{int(number)} B" if unit == "B" else f"{number:.2f} {unit}"
+        if unit == "B":
+            if number < 1024:
+                return f"{int(number)} B"
+        elif round(number, 2) < 1024 or unit == "TB":
+            return f"{number:.2f} {unit}"
         number /= 1024
 
 
@@ -181,6 +203,8 @@ class OBSController:
         self._instance_id = uuid.uuid4().hex
         self._settle_seconds = 0.2
         self._drain_seconds = 0.0
+        self._reconfiguring = False
+        self._text_cache = (False, 0, 0, "—", "尚未收到 OBS 数据", "00:00:00")
 
     def _effective_config_values(self):
         cfg = self.config
@@ -197,6 +221,8 @@ class OBSController:
     @property
     def control_timeout(self):
         with self._lock:
+            if self._state["busy"]:
+                return max(7.0, max(self.confirmation_timeout, self._drain_seconds) + 2 * self._settle_seconds + 8.0)
             return max(7.0, max(self.confirmation_timeout, self._drain_seconds) + self._settle_seconds + 10.0)
 
     def snapshot(self):
@@ -207,17 +233,27 @@ class OBSController:
             state["instance_id"] = self._instance_id
             sampled = self._sampled_at
             cfg = self._effective_config_values()
+            has_sample = sampled is not None
+            cache_key = (has_sample, state["bytes"], state["duration_ms"])
+            if self._text_cache[:3] == cache_key:
+                size_text, size_exact_text, duration_text = self._text_cache[3:]
+            else:
+                size_text = format_size(state["bytes"]) if has_sample else "—"
+                size_exact_text = f"{state['bytes']:,} 字节" if has_sample else "尚未收到 OBS 数据"
+                duration_text = format_duration(state["duration_ms"])
+                self._text_cache = (*cache_key, size_text, size_exact_text, duration_text)
             state.update(sound_enabled=cfg["sound_enabled"],
                          sound_actions=cfg["sound_actions"],
                          threshold_gb=cfg["threshold_gb"],
                          threshold_bytes=int(cfg["threshold_gb"] * 1024**3),
-                         alert_enabled=cfg["alert_enabled"], alerted=self._alerted,
-                         control_timeout_ms=int(self.control_timeout * 1000))
+                         alert_enabled=cfg["alert_enabled"],
+                         alerted=bool(cfg["alert_enabled"] and self._alerted),
+                         control_timeout_ms=int(self.control_timeout * 1000),
+                         size_text=size_text,
+                         size_exact_text=size_exact_text,
+                         duration_text=duration_text)
         state["data_age_ms"] = None if sampled is None else max(0, int((time.monotonic() - sampled) * 1000))
         state["stale"] = not state["connected"] or sampled is None or state["data_age_ms"] > 3000
-        state["size_text"] = format_size(state["bytes"]) if sampled is not None else "—"
-        state["size_exact_text"] = f"{state['bytes']:,} 字节" if sampled is not None else "尚未收到 OBS 数据"
-        state["duration_text"] = format_duration(state["duration_ms"])
         state["state_text"] = "未连接" if not state["connected"] else "已暂停" if state["paused"] else "录制中" if state["active"] else "准备就绪"
         if state["connected"] and state["stale"]:
             state["state_text"] = "数据已过期"
@@ -322,6 +358,7 @@ class OBSController:
         # Settings dialogs and phone sound updates share a transaction. A sound
         # toggle received while a dialog is open must not be lost when it saves.
         old_client = None
+        changed = False
         with self._config_lock:
             with self._lock:
                 candidate.sound_enabled = self.config.sound_enabled
@@ -331,67 +368,89 @@ class OBSController:
                 previous = self.config
                 changed = any(getattr(candidate, key) != getattr(previous, key)
                               for key in ("obs_host", "obs_port", "obs_password"))
-                if changed and self._state["busy"]:
+                if changed and (self._state["busy"] or self._reconfiguring):
                     raise ValueError("正在确认录制操作，请等待操作完成后再修改 OBS 连接")
-            candidate.save(save_password=True)
-            with self._lock:
-                candidate.sound_enabled = self.config.sound_enabled
-                candidate.sound_actions = dict(self.config.sound_actions)
-                candidate.theme = self.config.theme
-                candidate.help_seen = self.config.help_seen
-                self.config = candidate
                 if changed:
-                    self._reconnect.set()
-                    self._last_error = ""
-                    self._state.update(connected=False, message="正在重新连接 OBS…")
-                    if (candidate.obs_host, candidate.obs_port) != (previous.obs_host, previous.obs_port):
-                        self._last_observed = self._sampled_at = None
+                    self._reconfiguring = True
+            try:
+                candidate.save(save_password=True)
+                with self._lock:
+                    candidate.sound_enabled = self.config.sound_enabled
+                    candidate.sound_actions = dict(self.config.sound_actions)
+                    candidate.theme = self.config.theme
+                    candidate.help_seen = self.config.help_seen
+                    self.config = candidate
+                    if not candidate.alert_enabled or (
+                        candidate.threshold_gb > previous.threshold_gb
+                        and self._state["bytes"] < int(candidate.threshold_gb * 1024**3)
+                    ):
                         self._alerted = False
-                        self._state.update(active=False, paused=False, bytes=0, duration_ms=0, last_file="")
-                    self._fail_pending("OBS 连接设置已更改，旧操作已取消，请确认新连接的状态")
-                    old_client = self._client
+                    if changed:
+                        self._reconnect.set()
+                        self._last_error = ""
+                        self._state.update(connected=False, message="正在重新连接 OBS…")
+                        if (candidate.obs_host, candidate.obs_port) != (previous.obs_host, previous.obs_port):
+                            self._last_observed = self._sampled_at = None
+                            self._alerted = False
+                            self._state.update(active=False, paused=False, bytes=0, duration_ms=0, last_file="")
+                        self._fail_pending("OBS 连接设置已更改，旧操作已取消，请确认新连接的状态")
+                        old_client = self._client
+                        self._wake.set()
+            finally:
+                if changed:
+                    with self._lock:
+                        self._reconfiguring = False
                     self._wake.set()
         if old_client:
             old_client.close()
         return previous
 
-    def _observe(self, data, notify=True):
+    def _observe_locked(self, data, notify=True):
         current = {"active": bool(data.get("outputActive")), "paused": bool(data.get("outputPaused")),
                    "bytes": max(0, int(data.get("outputBytes") or 0)),
                    "duration_ms": max(0, int(data.get("outputDuration") or 0))}
-        with self._lock:
-            previous = self._last_observed
-            action = None
-            reset_counters = previous is not None and current["bytes"] < previous["bytes"] and current["duration_ms"] < previous["duration_ms"]
-            new_session = current["active"] and (previous is None or not previous["active"] or reset_counters)
-            if new_session or not current["active"]:
-                self._alerted = False
-            if previous is not None:
-                if new_session:
-                    action = "start"
-                elif previous["active"] and not current["active"]:
-                    action = "stop"
-                elif current["active"] and current["paused"] != previous["paused"]:
-                    action = "pause" if current["paused"] else "resume"
-            display = dict(current)
-            if not current["active"] and previous and previous["active"]:
-                display["bytes"] = max(current["bytes"], previous["bytes"])
-                display["duration_ms"] = max(current["duration_ms"], previous["duration_ms"])
-            elif not current["active"]:
-                display["bytes"] = self._state["bytes"]
-                display["duration_ms"] = self._state["duration_ms"]
-            self._last_observed = current
-            cfg = self._effective_config_values()
-            threshold = int(cfg["threshold_gb"] * 1024**3)
-            fire_alert = cfg["alert_enabled"] and current["active"] and current["bytes"] >= threshold and not self._alerted
-            if fire_alert:
-                self._alerted = True
-            self._sampled_at = time.monotonic()
-            self._state.update(connected=True, message="", **display)
-        if notify and action:
-            self.on_event("action", action)
+        events = []
+        previous = self._last_observed
+        action = None
+        reset_counters = previous is not None and current["bytes"] < previous["bytes"] and current["duration_ms"] < previous["duration_ms"]
+        new_session = current["active"] and (previous is None or not previous["active"] or reset_counters)
+        if new_session or not current["active"]:
+            self._alerted = False
+        if previous is not None:
+            if new_session:
+                action = "start"
+            elif previous["active"] and not current["active"]:
+                action = "stop"
+            elif current["active"] and current["paused"] != previous["paused"]:
+                action = "pause" if current["paused"] else "resume"
+        display = dict(current)
+        if not current["active"] and previous and previous["active"]:
+            display["bytes"] = max(current["bytes"], previous["bytes"])
+            display["duration_ms"] = max(current["duration_ms"], previous["duration_ms"])
+        elif not current["active"]:
+            display["bytes"] = self._state["bytes"]
+            display["duration_ms"] = self._state["duration_ms"]
+        self._last_observed = current
+        cfg = self._effective_config_values()
+        threshold = int(cfg["threshold_gb"] * 1024**3)
+        if not cfg["alert_enabled"] or (current["active"] and current["bytes"] < threshold):
+            self._alerted = False
+        fire_alert = cfg["alert_enabled"] and current["active"] and current["bytes"] >= threshold and not self._alerted
         if fire_alert:
-            self.on_event("size_alert", current["bytes"])
+            self._alerted = True
+        self._sampled_at = time.monotonic()
+        self._state.update(connected=True, message="", **display)
+        if notify and action:
+            events.append(("action", action))
+        if fire_alert:
+            events.append(("size_alert", current["bytes"]))
+        return events, action
+
+    def _observe(self, data, notify=True):
+        with self._lock:
+            events, _ = self._observe_locked(data, notify=notify)
+        for kind, payload in events:
+            self.on_event(kind, payload)
 
     def _execute(self, action, future, queued_at):
         if not future.set_running_or_notify_cancel():
@@ -406,10 +465,14 @@ class OBSController:
             with self._lock:
                 if self._stop.is_set() or self._reconnect.is_set():
                     raise OBSRequestError("软件已关闭或 OBS 连接已重置，操作未执行")
-                self._observe(data)
-                if not self.snapshot()["allowed"][action]:
-                    raise OBSRequestError("当前状态不能" + LABELS[action])
-                self._state["busy"] = True
+                preflight_events, _ = self._observe_locked(data)
+                allowed_now = self.snapshot()["allowed"][action]
+                if allowed_now:
+                    self._state["busy"] = True
+            for kind, payload in preflight_events:
+                self.on_event(kind, payload)
+            if not allowed_now:
+                raise OBSRequestError("当前状态不能" + LABELS[action])
             # Video settings can change between recordings without reconnecting.
             frame_interval = self._client.get_frame_interval()
             with self._lock:
@@ -438,8 +501,18 @@ class OBSController:
                 with self._lock:
                     if self._stop.is_set() or self._reconnect.is_set():
                         raise OBSRequestError("软件已关闭或连接已重置，操作结果未确认")
-                    self._observe(data, notify=False)
+                    pending_events, observed_action = self._observe_locked(data, notify=False)
+                    if action in ("pause", "resume") and not self._state["active"]:
+                        if observed_action == "stop":
+                            pending_events.insert(0, ("action", "stop"))
+                        aborted_by_stop = True
+                    else:
+                        aborted_by_stop = False
                     state = self.snapshot()
+                for kind, payload in pending_events:
+                    self.on_event(kind, payload)
+                if aborted_by_stop:
+                    raise OBSRequestError(f"OBS 录制已结束，无法{LABELS[action]}")
                 confirmed = {"start": state["active"], "stop": not state["active"],
                              "pause": state["active"] and state["paused"],
                              "resume": state["active"] and not state["paused"]}[action]
@@ -521,12 +594,19 @@ class OBSController:
                     if self._stop.is_set() or self._reconnect.is_set():
                         continue
                     self._settle_seconds = min(30.0, max(0.2, 3 * frame_interval))
-                    self._observe(data)
+                    initial_events, _ = self._observe_locked(data)
+                for kind, payload in initial_events:
+                    self.on_event(kind, payload)
                 self.on_event("log", "OBS 已连接")
                 self._last_error = ""
                 next_poll = time.monotonic() + self.interval
                 while not self._stop.is_set() and not self._reconnect.is_set():
                     self._wake.clear()
+                    with self._lock:
+                        reconfiguring = self._reconfiguring
+                    if reconfiguring:
+                        self._wake.wait(0.02)
+                        continue
                     try:
                         command = self._commands.get_nowait()
                     except queue.Empty:
@@ -536,9 +616,12 @@ class OBSController:
                         continue
                     if time.monotonic() >= next_poll:
                         data = client.get_record_status()
+                        poll_events = []
                         with self._lock:
                             if not self._stop.is_set() and not self._reconnect.is_set():
-                                self._observe(data)
+                                poll_events, _ = self._observe_locked(data)
+                        for kind, payload in poll_events:
+                            self.on_event(kind, payload)
                         next_poll = time.monotonic() + self.interval
                     if not self._stop.is_set() and not self._reconnect.is_set() and self._commands.empty():
                         self._wake.wait(max(0.01, min(self.interval, next_poll - time.monotonic())))

@@ -12,8 +12,10 @@ import tempfile
 import wave
 import winsound
 
-APP_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / "OBSAudioMonitor"
+APP_DIR = Path(os.environ.get("APPDATA") or Path.home()) / "OBSAudioMonitor"
 SOUND_DIR = APP_DIR / "sounds"
+_TITLE_BAR_CACHE: dict[int, dict[int, int]] = {}
+_UNSUPPORTED_DWM_ATTRS: set[int] = set()
 
 
 @lru_cache(maxsize=1)
@@ -29,12 +31,22 @@ def set_title_bar_theme(handle, dark, background, foreground):
     try:
         setter = _dwm_setter()
         colors = [int(value.lstrip("#"), 16) for value in (background, foreground)]
-        values = [(20, int(dark))]  # DWMWA_USE_IMMERSIVE_DARK_MODE
+        values = [(20, int(bool(dark)))]  # DWMWA_USE_IMMERSIVE_DARK_MODE
         for attribute, rgb in zip((35, 36), colors):  # CAPTION_COLOR / TEXT_COLOR
             values.append((attribute, (rgb & 255) << 16 | rgb & 0xff00 | rgb >> 16))
+        if len(_TITLE_BAR_CACHE) > 32:
+            _TITLE_BAR_CACHE.clear()
+        cached = _TITLE_BAR_CACHE.get(handle)
         for attribute, value in values:
+            if attribute in _UNSUPPORTED_DWM_ATTRS or (cached is not None and cached.get(attribute) == value):
+                continue
             data = wintypes.DWORD(value)
-            setter(handle, attribute, ctypes.byref(data), ctypes.sizeof(data))
+            hr = setter(handle, attribute, ctypes.byref(data), ctypes.sizeof(data))
+            if isinstance(hr, int):
+                if hr == 0:
+                    _TITLE_BAR_CACHE.setdefault(handle, {})[attribute] = value
+                elif attribute in (35, 36) and (hr & 0xFFFFFFFF) == 0x80070057:
+                    _UNSUPPORTED_DWM_ATTRS.add(attribute)
     except (AttributeError, OSError):
         pass
 
@@ -256,7 +268,7 @@ class AudioPlayer:
         for frequency, duration in recipe:
             count = int(sample_rate * duration)
             if frequency <= 0:
-                samples.extend(0 for _ in range(count))
+                samples.extend([0] * count)
                 continue
             for index in range(count):
                 position = index / sample_rate

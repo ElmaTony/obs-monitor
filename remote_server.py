@@ -47,6 +47,9 @@ class _RemoteHTTPServer(ThreadingHTTPServer):
         finally:
             self._concurrency_slots.release()
 
+    def handle_error(self, request, client_address):
+        pass
+
 
 def _same_origin(origin, host_header):
     if not host_header:
@@ -79,16 +82,22 @@ def _public_state(state):
 def lan_addresses():
     addresses = []
     preferred = None
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
-            probe.connect(("192.0.2.1", 80))
-            preferred = probe.getsockname()[0]
-            addresses.append(preferred)
-    except OSError:
-        pass
+    for target in ("192.0.2.1", "192.168.1.1", "10.0.0.1", "172.16.0.1"):
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+                probe.connect((target, 80))
+                candidate = probe.getsockname()[0]
+                if candidate and not candidate.startswith("127.") and candidate != "0.0.0.0":
+                    preferred = candidate
+                    addresses.append(preferred)
+                    break
+        except OSError:
+            continue
     try:
         addresses.extend(socket.gethostbyname_ex(socket.gethostname())[2])
     except OSError:
+        pass
+    if not any(ip and not ip.startswith("127.") and ip != "0.0.0.0" for ip in addresses):
         try:
             infos = socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)
             addresses.extend(info[4][0] for info in infos if info[4])
@@ -160,7 +169,7 @@ class RemoteServer:
             def log_message(self, *args):
                 pass  # Never log tokens, connection settings, or request payloads.
 
-            def send_payload(self, status, payload, content_type="application/json; charset=utf-8", forget=False):
+            def send_payload(self, status, payload, content_type="application/json; charset=utf-8", forget=False, head_only=False):
                 data = payload if isinstance(payload, bytes) else json.dumps(payload, ensure_ascii=False).encode("utf-8")
                 try:
                     self.send_response(status)
@@ -178,19 +187,20 @@ class RemoteServer:
                           and hmac.compare_digest(self._pairing_token, owner.token)):
                         self.send_header("Set-Cookie", f"{PAIRING_COOKIE}={self._pairing_token}; Path=/; Max-Age={PAIRING_MAX_AGE}; HttpOnly; SameSite=Strict")
                     self.end_headers()
-                    self.wfile.write(data)
+                    if not head_only:
+                        self.wfile.write(data)
                 except OSError:
                     pass  # A phone may cancel a superseded poll or leave the page.
                 finally:
                     self.close_connection = True
 
-            def authenticated(self):
+            def authenticated(self, head_only=False):
                 if not owner._accepting.is_set():
-                    self.send_payload(503, {"ok": False, "message": "手机遥控已关闭"})
+                    self.send_payload(503, {"ok": False, "message": "手机遥控已关闭"}, head_only=head_only)
                     return False
                 origin = self.headers.get("Origin")
                 if origin and not _same_origin(origin, self.headers.get("Host", "")):
-                    self.send_payload(403, {"ok": False, "message": "请求来源无效"})
+                    self.send_payload(403, {"ok": False, "message": "请求来源无效"}, head_only=head_only)
                     return False
                 provided = self.headers.get("X-OBS-Token", "")
                 cookie = SimpleCookie()
@@ -204,7 +214,7 @@ class RemoteServer:
                 header_match = bool(provided) and hmac.compare_digest(provided.encode("utf-8"), expected)
                 cookie_match = bool(saved) and hmac.compare_digest(saved.encode("utf-8"), expected)
                 if not (header_match or cookie_match):
-                    self.send_payload(401, {"ok": False, "message": "此浏览器尚未配对，或电脑已重置配对。请粘贴电脑中的完整控制链接，或扫码连接。"})
+                    self.send_payload(401, {"ok": False, "message": "此浏览器尚未配对，或电脑已重置配对。请粘贴电脑中的完整控制链接，或扫码连接。"}, head_only=head_only)
                     return False
                 self._pairing_token = token_at_auth
                 self._used_header_token = header_match
@@ -222,6 +232,18 @@ class RemoteServer:
                     self.send_payload(204, b"", "image/x-icon")
                 else:
                     self.send_payload(404, {"ok": False, "message": "页面不存在"})
+
+            def do_HEAD(self):
+                path = urlsplit(self.path).path
+                if path == "/":
+                    self.send_payload(200, page, "text/html; charset=utf-8", head_only=True)
+                elif path == "/api/status":
+                    if self.authenticated(head_only=True):
+                        self.send_payload(200, _public_state(owner.controller.snapshot()), head_only=True)
+                elif path == "/favicon.ico":
+                    self.send_payload(204, b"", "image/x-icon", head_only=True)
+                else:
+                    self.send_payload(404, {"ok": False, "message": "页面不存在"}, head_only=True)
 
             def do_POST(self):
                 if not self.authenticated():

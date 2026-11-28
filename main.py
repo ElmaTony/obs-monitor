@@ -7,7 +7,7 @@ def main():
         import sys
         import traceback
         from pathlib import Path
-        directory = Path(os.environ.get("APPDATA", str(Path.home()))) / "OBSAudioMonitor"
+        directory = Path(os.environ.get("APPDATA") or Path.home()) / "OBSAudioMonitor"
         log_path = directory / "startup-error.log"
         try:
             directory.mkdir(parents=True, exist_ok=True)

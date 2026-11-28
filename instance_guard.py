@@ -1,7 +1,9 @@
 """Use a user-scoped local socket to keep one desktop controller running."""
 from __future__ import annotations
 
+import ctypes
 import hashlib
+import sys
 
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
@@ -26,6 +28,11 @@ class SingleInstance(QObject):
         connection.connectToServer(self.name)
         connected = connection.waitForConnected(400)
         if connected:
+            if sys.platform == "win32":
+                try:
+                    ctypes.windll.user32.AllowSetForegroundWindow(-1)
+                except Exception:
+                    pass
             connection.write(b"activate")
             connection.waitForBytesWritten(300)
             connection.disconnectFromServer()
@@ -38,7 +45,11 @@ class SingleInstance(QObject):
         if not self.server.listen(self.name):
             if self._notify_existing():
                 return False
-            raise RuntimeError("无法创建应用实例，请关闭其他 OBS Monitor 后重试")
+            QLocalServer.removeServer(self.name)
+            if not self.server.listen(self.name):
+                if self._notify_existing():
+                    return False
+                raise RuntimeError("无法创建应用实例，请关闭其他 OBS Monitor 后重试")
         self.acquired = True
         return True
 
