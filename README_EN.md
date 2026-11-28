@@ -7,16 +7,23 @@
     <a href="README.md">简体中文</a> · <strong>English</strong>
   </p>
 
-  <p><strong>A lightweight, reliable Windows recording console and LAN mobile remote for OBS Studio</strong></p>
+  <p><strong>A Windows recording console and app-free LAN mobile remote for OBS Studio</strong></p>
   <p>Track recording duration and real-time output bytes live, and start, pause, resume, or stop recordings from your phone by scanning a QR code.</p>
 
   <p>
+    <a href="https://github.com/ElmaTony/obs-monitor/actions/workflows/ci.yml">
+      <img src="https://github.com/ElmaTony/obs-monitor/actions/workflows/ci.yml/badge.svg" alt="CI Status">
+    </a>
+  </p>
+
+  <p>
     <a href="#download"><strong>Download v2.3.3</strong></a> ·
-    <a href="#screenshots">Screenshots</a> ·
+    <a href="#interface-preview">Preview</a> ·
     <a href="#quick-start">Quick Start</a> ·
+    <a href="#how-it-works-and-security">How It Works</a> ·
     <a href="#faq">FAQ</a> ·
-    <a href="CHANGELOG.md">Changelog</a> ·
-    <a href="https://github.com/ElmaTony/obs-monitor/issues">Issues</a>
+    <a href="#development">Development</a> ·
+    <a href="CHANGELOG.md">Changelog</a>
   </p>
 
   <br>
@@ -27,27 +34,47 @@
     <img src="assets/desktop-light.png" width="840" alt="OBS Monitor desktop interface">
   </picture>
 
-  <p><sub>Sample data shown · Automatically adapts to your GitHub light/dark theme</sub></p>
+  <p><sub>Sample data shown · Automatically adapts to GitHub light (Warm Sand Coral) and dark (Warm Charcoal Coral outline) themes</sub></p>
 </div>
 
 ---
 
-## Key Features
+## Why OBS Monitor
 
-| Feature | Description |
+| Pain Point | How OBS Monitor Solves It |
 | --- | --- |
-| **Confirmed Recording Controls** | Start, pause, resume, and stop OBS recordings. Every command waits for actual OBS state confirmation before reporting success or playing feedback, preventing duplicate submissions and accommodating long encoder drain times at fractional FPS. |
-| **Real-Time Output Size** | Reads `GetRecordStatus.outputBytes` directly via OBS WebSocket v5, displaying both exact raw bytes and human-readable units even when the recording file still reports `0 KB` in File Explorer. |
-| **App-Free Mobile Remote** | Scan the QR code or open the pairing link on the same LAN to control recordings and toggle desktop audio cues. Persistent pairing automatically reconnects after closing the browser, switching apps, or restarting the desktop tool. |
-| **Per-Action Audio Cues & Size Alert** | Distinct sound cues for start, pause, resume, and stop with a master mute toggle, per-action switches, and preview buttons. Plays a one-time alert per recording when output crosses your custom size threshold. |
-| **Structured Activity Log** | Displays a live event feed with status dots and monospace timestamps right in the main window, plus a dedicated full-log viewer (live sync, resize reflow, one-click copy) and quick clear action. |
-| **Warm Light & Dark Compact UI** | Fixed `840×560` compact desktop window (with safe fallback on smaller screens), smooth transitions between Warm Sand Coral (light) and Warm Charcoal Coral outline cards (dark), theme-matched Windows title bar, single-instance guard, and first-run guide. |
+| **Alt-tabbing breaks fullscreen recordings** | Keep your phone on your desk to monitor elapsed time and status live, with distinct desktop audio cues confirming every command without leaving your game or presentation. |
+| **Explorer shows `0 KB` while recording** | Queries `GetRecordStatus.outputBytes` directly over OBS WebSocket v5, displaying both human-readable sizes and exact raw byte counts regardless of OS file metadata lag. |
+| **Accidental double-taps or premature errors** | Controls strictly follow live OBS state; every command waits for encoder stability (at least 3 video frame intervals, plus up to 64 NVENC queued frames when stopping at fractional FPS) and never replays unknown requests. |
+| **No mobile app install or cloud relay** | Bundled LAN web remote works right in your phone browser with zero external CDNs. Persistent pairing reconnects automatically across app switches, closed tabs, and desktop restarts. |
 
 ---
 
-## Screenshots
+## Interface Preview
 
-### Desktop Light & Dark Themes
+### Mobile Web Remote & Settings Dialog
+
+<table>
+  <tr>
+    <td align="center" width="33%">
+      <img src="assets/mobile-light.png" width="240" alt="Mobile light remote interface"><br>
+      <sub>Mobile · Light (Warm Sand Coral)</sub>
+    </td>
+    <td align="center" width="33%">
+      <img src="assets/mobile-dark.png" width="240" alt="Mobile dark remote interface"><br>
+      <sub>Mobile · Dark (Warm Charcoal Coral)</sub>
+    </td>
+    <td align="center" width="34%">
+      <img src="assets/settings-dark.png" width="270" alt="Desktop connection and alert settings dialog"><br>
+      <sub>Desktop · Connection & Alerts</sub>
+    </td>
+  </tr>
+</table>
+
+<details>
+<summary>Expand to compare Desktop Light & Dark themes side by side</summary>
+
+<br>
 
 <table>
   <tr>
@@ -58,30 +85,6 @@
     <td align="center" width="50%">
       <img src="assets/desktop-dark.png" alt="Desktop dark theme (Warm Charcoal Coral)"><br>
       <sub>Dark · Warm Charcoal Coral (outline cards)</sub>
-    </td>
-  </tr>
-</table>
-
-### Mobile Web Remote & Settings Dialog
-
-<details>
-<summary>Expand to view mobile light/dark remote pages and desktop settings dialog</summary>
-
-<br>
-
-<table>
-  <tr>
-    <td align="center" width="33%">
-      <img src="assets/mobile-light.png" width="260" alt="Mobile light remote interface"><br>
-      <sub>Mobile · Light</sub>
-    </td>
-    <td align="center" width="33%">
-      <img src="assets/mobile-dark.png" width="260" alt="Mobile dark remote interface"><br>
-      <sub>Mobile · Dark</sub>
-    </td>
-    <td align="center" width="34%">
-      <img src="assets/settings-dark.png" width="280" alt="Desktop dark settings dialog"><br>
-      <sub>Desktop · Connection & Alerts</sub>
     </td>
   </tr>
 </table>
@@ -107,40 +110,54 @@ Current stable release: **v2.3.3** (all packages bundle the full runtime; no Pyt
 
 > **Requirements**: Windows 10 / 11 x64 or Windows 11 ARM64, and OBS Studio with **WebSocket v5** support (built into OBS 28+).
 
+<details>
+<summary>Verify SHA-256 checksums in PowerShell</summary>
+
+```powershell
+Get-FileHash .\obs-monitor-2.3.3-windows-x64-setup.exe -Algorithm SHA256
+```
+
+Compare the output hash against the corresponding line in [SHA256SUMS.txt](https://github.com/ElmaTony/obs-monitor/releases/download/v2.3.3/SHA256SUMS.txt).
+
+</details>
+
 ---
 
 ## Quick Start
 
 ### 1. Enable WebSocket Server in OBS
-Open OBS Studio, go to **Tools → WebSocket Server Settings**, enable the server (default port `4455`), and note your server password if authentication is enabled.
+Open OBS Studio, go to **Tools → WebSocket Server Settings**, check **Enable WebSocket server** (default port `4455`), and note your server password if authentication is enabled.
 
 ### 2. Launch the Desktop Console
-Start OBS Monitor. A quick-start guide appears on first launch (reopen anytime via the top-right **?** button):
-- OBS Monitor automatically attempts to detect your local OBS WebSocket settings.
-- If it does not connect automatically, click **Settings** in the top-right corner, enter the matching OBS host, port, and password, and click **Save & Apply**.
-- Once connected, control recording with the four main buttons and manage sound cues on the right panel.
+Start OBS Monitor (a quick-start guide appears on first launch and can be reopened anytime via the top-right **?** button):
+- OBS Monitor automatically detects local OBS WebSocket settings and connects;
+- If connecting manually or targeting another OBS host on your LAN, open **Settings** in the top-right corner, enter the host, port, and password, then click **Save & Apply**;
+- Once connected, control recordings with the four main buttons and manage master/per-action sound cues and previews on the right panel.
 
 ### 3. Pair Your Phone
 1. Connect your phone and PC to the **same local network** (a wired PC and a phone on the same router's Wi-Fi work fine).
-2. Scan the QR code on the right panel, or click **Copy Link** and open it in your phone's browser (default web port `8765`).
-3. Once paired, bookmark the page or add it to your home screen. Reopening the same URL in the same browser reconnects automatically.
+2. Scan the QR code on the right panel, or click **Copy Link** and open it in your phone's browser (default web port `8765`; switch LAN IPs from the dropdown if multiple adapters exist).
+3. Bookmark the page or add it to your home screen after pairing—reopening the same URL in the same browser reconnects automatically.
 
 ---
 
-## How It Works
+## How It Works and Security
 
-### Mobile Pairing & Reconnection
-- **Seamless Recovery**: Switch apps, lock your phone, close tabs, or even restart OBS Monitor on your PC—reopening the page immediately syncs the live recording state.
-- **Automatic Network Updates**: Monitors network adapter changes in the background and refreshes the QR code automatically, preferring LAN addresses reachable by your phone over virtual adapters.
-- **Revoking Access**:
-  - **Forget This Device** (on phone): Clears pairing only for the current browser.
-  - **Reset All Phone Pairings** (in desktop settings): Immediately revokes every previous pairing link and browser session; all devices must scan the new QR code.
-- **When Re-Pairing Is Needed**: Closing a private/incognito window, clearing site data, switching browsers, resetting all pairings from desktop settings, or changing the PC's LAN IP or remote web port.
-- **Security Note**: The pairing link contains remote-control credentials. Share it only with trusted devices on a trusted LAN. Keep the desktop app running while using the mobile remote.
-
-### Live Output Size & State Sync
-- **Why Explorer Shows `0 KB`**: Windows often reports `0 KB` while a recording is still open. OBS Monitor queries OBS's cumulative output counter (`GetRecordStatus.outputBytes`) rather than file metadata or bitrate estimates. Because final MKV/MP4 files also include container overhead, the final file size on disk may differ slightly from the cumulative byte count.
-- **Sync Cadence & Safety**: Desktop refreshes every ~`0.5 s` and mobile foreground refreshes every ~`0.8 s` (polling pauses automatically in the background and syncs immediately upon return). If disconnected or data becomes stale, the UI retains the last valid reading and disables recording buttons to prevent blind actions.
+- **Live State Sync & Safety Locks**
+  - Desktop polls OBS every ~`0.5 s` and mobile foreground pages refresh every ~`0.8 s` (polling pauses automatically in the background and syncs immediately upon return).
+  - When disconnected or data is older than `3 s`, both UIs retain the last valid reading and disable recording buttons to prevent blind actions.
+  - `GetRecordStatus.outputBytes` tracks cumulative encoder output; final MKV/MP4 files on disk may differ slightly due to container muxing overhead.
+- **Audio Cues & Size Threshold Alerts**
+  - Synthesizes five distinct PCM audio cues locally (start, pause, resume, stop, and size alert; corrupted cache files are automatically regenerated), with synced desktop/mobile master mute, per-action toggles, and live preview buttons.
+  - Custom size threshold (`0.1`–`102400 GB`) triggers a one-time alert per recording; raising the threshold or disabling alerts mid-recording resets the alert state cleanly.
+- **Persistent Pairing & Scoped Revocation**
+  - Pairing persists via a `HttpOnly; SameSite=Strict` cookie and browser storage; background network discovery updates the QR code automatically and prefers phone-reachable LAN adapters over virtual interfaces.
+  - Clear separation of revocation: **Forget This Device** (on phone) unpairs only the current browser, while **Reset All Phone Pairings** (in desktop settings) immediately revokes every prior link and browser session.
+  - Re-pairing is required only when closing a private/incognito window, clearing site data, switching browsers, resetting all pairings from desktop settings, or changing the PC's LAN IP or remote web port.
+- **Credential Isolation**
+  - General preferences, theme choice, and first-run state are stored in `%APPDATA%/OBSAudioMonitor/config.json` (folder name kept for backward compatibility).
+  - The OBS WebSocket password and mobile pairing secret are stored separately in **Windows Credential Manager**, never written in plaintext to disk or source; mobile API responses omit both OBS credentials and local recording file paths.
+  - The mobile server uses HTTP for trusted LANs—never expose its port to the public internet, and share the pairing link only with trusted devices.
 
 ---
 
@@ -149,9 +166,9 @@ Start OBS Monitor. A quick-start guide appears on first launch (reopen anytime v
 <details>
 <summary><strong>My phone cannot open the remote page</strong></summary>
 
-1. Verify that OBS Monitor is running on your PC and the mobile remote status badge shows enabled.
+1. Verify that OBS Monitor is running on your PC and the mobile remote badge shows enabled.
 2. Open the LAN address displayed by OBS Monitor (e.g. `192.168.x.x:8765`); `127.0.0.1` is reachable only on the PC itself.
-3. Check that Windows Firewall allows OBS Monitor on Private networks, and rule out VPNs, proxy clients, guest Wi-Fi, or router AP isolation.
+3. Ensure Windows Firewall allows OBS Monitor on Private networks, and rule out VPNs, proxy clients, guest Wi-Fi, or router AP isolation.
 4. Default ports: `4455` for OBS WebSocket and `8765` for the mobile web remote.
 
 </details>
@@ -159,7 +176,7 @@ Start OBS Monitor. A quick-start guide appears on first launch (reopen anytime v
 <details>
 <summary><strong>Why are some recording buttons grayed out?</strong></summary>
 
-Buttons strictly reflect the live OBS state:
+Buttons strictly mirror live OBS state:
 - **Idle**: Only **Start** is enabled.
 - **Recording**: Only **Pause** and **Stop** are enabled.
 - **Paused**: Only **Resume** and **Stop** are enabled.
@@ -193,25 +210,14 @@ Your settings, OBS password, and mobile pairings for the current Windows user ar
 
 </details>
 
-<details>
-<summary><strong>Where are settings, OBS passwords, and pairing credentials stored?</strong></summary>
-
-- General settings, theme preference, and first-run guide state are stored in `%APPDATA%/OBSAudioMonitor/config.json` (kept under this folder name for backward compatibility).
-- Your OBS WebSocket password and mobile pairing secret are stored separately in **Windows Credential Manager**, never written in plaintext into the app or source directory.
-
-</details>
-
 ---
 
 ## Development
 
-<details>
-<summary>Expand for running from source, automated tests, and building release packages</summary>
-
 ### Prerequisites
 - Windows 10 / 11
 - Python 3.12+
-- Node.js 22+ (for mobile frontend logic tests)
+- Node.js 22+ (for mobile frontend and race-condition tests)
 
 ### Run from Source
 
@@ -232,16 +238,14 @@ node test_mobile_races.cjs
 node test_mobile_pairing.cjs
 ```
 
-- Automated tests include 190 Python unit/UI tests and 49 mobile script tests covering recording controls, state confirmation, fractional-FPS encoder drain handling, raw output bytes, sound cues, settings validation, persistent pairing, reconnection, desktop UI regressions, and out-of-order request races.
-- Source code is checked automatically on native Windows x64 and ARM64 runners via [GitHub Actions](https://github.com/ElmaTony/obs-monitor/actions); release builds undergo simulated OBS WebSocket v5 integration checks, single-instance tests, and silent install/uninstall smoke tests on both architectures.
-- Real-hardware baseline: Verified on 2026-11-16 on Windows x64 with OBS Studio 33.0.1 (1080p60 / NVENC H.264 / MKV) and Android Chrome across all four controls, raw output byte parity, cookie-based reconnection, pairing persistence across restarts, and 1-frame-per-6-seconds stop drain.
+- **Automated Coverage**: 190 Python unit/UI tests and 49 mobile script tests covering recording controls, state confirmation, fractional-FPS encoder drain handling, raw output bytes, audio cues, settings validation, persistent pairing, reconnection, desktop UI regressions, and out-of-order request races.
+- **CI & Release Verification**: Source code is verified on native Windows x64 and ARM64 runners via [GitHub Actions](https://github.com/ElmaTony/obs-monitor/actions); release packages undergo simulated OBS WebSocket v5 integration checks, single-instance checks, and silent install/uninstall smoke tests on both architectures.
+- **Real-Hardware Baseline**: Verified on 2026-11-16 on Windows x64 with OBS Studio 33.0.1 (1080p60 / NVENC H.264 / MKV) and Android Chrome across all four controls, raw output byte parity, cookie-based reconnection, pairing persistence across restarts, and 1-frame-per-6-seconds stop drain.
 
 ### Build Release Packages
 The complete release source archive (`obs-monitor-2.3.3-source.zip`) includes `BUILDING.md` and packaging scripts to build native x64 and ARM64 installers, portable archives, and single-file executables on Windows.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md) for contribution guidelines and security reporting.
-
-</details>
+See [CHANGELOG.md](CHANGELOG.md), [CONTRIBUTING.md](CONTRIBUTING.md), and [SECURITY.md](SECURITY.md) for version history, contribution guidelines, and security reporting.
 
 ---
 
